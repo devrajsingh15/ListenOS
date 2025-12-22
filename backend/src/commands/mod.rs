@@ -743,18 +743,44 @@ pub async fn type_text(text: String) -> Result<CommandResult, String> {
 }
 
 async fn type_text_internal(text: String) -> Result<CommandResult, String> {
-    use enigo::{Enigo, Keyboard, Settings};
+    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
+    use arboard::Clipboard;
     
-    // Small delay to allow user to focus on target input
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Longer delay to ensure focus is restored after Ctrl+Space release
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     
+    // Use clipboard + Ctrl+V for reliable pasting (more reliable than enigo.text())
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| format!("Failed to access clipboard: {}", e))?;
+    
+    // Save current clipboard content to restore later
+    let previous_content = clipboard.get_text().ok();
+    
+    // Set our text to clipboard
+    clipboard.set_text(&text)
+        .map_err(|e| format!("Failed to set clipboard: {}", e))?;
+    
+    // Small delay for clipboard to be ready
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    
+    // Simulate Ctrl+V to paste
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("Failed to create enigo: {}", e))?;
     
-    enigo.text(&text)
-        .map_err(|e| format!("Failed to type: {}", e))?;
+    enigo.key(Key::Control, Direction::Press)
+        .map_err(|e| format!("Failed to press Ctrl: {}", e))?;
+    enigo.key(Key::Unicode('v'), Direction::Click)
+        .map_err(|e| format!("Failed to press V: {}", e))?;
+    enigo.key(Key::Control, Direction::Release)
+        .map_err(|e| format!("Failed to release Ctrl: {}", e))?;
     
-    log::info!("Typed: {}", text);
+    // Restore previous clipboard content after a delay
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    if let Some(prev) = previous_content {
+        let _ = clipboard.set_text(&prev);
+    }
+    
+    log::info!("Pasted: {}", text);
     
     Ok(CommandResult {
         success: true,
