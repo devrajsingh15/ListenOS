@@ -53,5 +53,4 @@ jobs:
           releaseBody: "See the assets below to download the latest version of ListenOS."
           releaseDraft: false
           prerelease: false
-          args: --bundle msi
           projectPath: ./backend
