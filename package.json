@@ -1,7 +1,9 @@
 {
-  "name": "listenos-app",
+  "name": "listenos",
   "version": "0.1.0",
   "private": true,
+  "author": "EvidentSphere",
+  "license": "PROPRIETARY",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

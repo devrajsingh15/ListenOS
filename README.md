@@ -29,7 +29,7 @@ ListenOS is a native desktop application that lets you control your computer usi
 1. **Clone the repository**
    ```bash
    git clone https://github.com/devrajsingh15/ListenOS.git
-   cd ListenOS/listenos-app
+   cd ListenOS
    ```
 
 2. **Install dependencies**
@@ -52,7 +52,7 @@ ListenOS is a native desktop application that lets you control your computer usi
    # or
    bun run tauri:build
    ```
-   The installer will be created in `src-tauri/target/release/bundle/`
+   The installer will be created in `backend/target/release/bundle/`
 
 ## 🎮 Usage
 
@@ -90,22 +90,21 @@ ListenOS is a native desktop application that lets you control your computer usi
 ## 🏗️ Architecture
 
 ```
-ListenOS
-├── listenos-app/
-│   ├── src/                    # Next.js frontend
-│   │   ├── app/
-│   │   │   ├── (dashboard)/   # Main dashboard UI
-│   │   │   └── (overlay)/     # Transparent voice overlay
-│   │   ├── components/        # React components
-│   │   └── lib/               # Utilities & Tauri bindings
-│   │
-│   └── src-tauri/             # Rust backend
-│       └── src/
-│           ├── audio/         # Audio capture (cpal)
-│           ├── cloud/         # Groq & Deepgram APIs
-│           ├── commands/      # Tauri command handlers
-│           ├── streaming/     # Audio streaming
-│           └── system/        # OS integrations
+ListenOS/
+├── src/                        # Next.js frontend
+│   ├── app/
+│   │   ├── (dashboard)/       # Main dashboard UI
+│   │   └── (overlay)/         # Transparent voice overlay
+│   ├── components/            # React components
+│   └── lib/                   # Utilities & Tauri bindings
+│
+└── backend/                   # Rust backend
+    └── src/
+        ├── audio/             # Audio capture (cpal)
+        ├── cloud/             # Groq & Deepgram APIs
+        ├── commands/          # Tauri command handlers
+        ├── streaming/         # Audio streaming
+        └── system/            # OS integrations
 ```
 
 ### Technology Stack
@@ -127,7 +126,7 @@ The default trigger is **Ctrl+Space**. You can change this in the Settings modal
 
 ListenOS comes with bundled API keys for immediate use. For heavy usage or production deployment, you can use your own keys:
 
-1. Create/edit `listenos-app/.env.local`
+1. Create/edit `.env.local` in the project root
 2. Add your keys:
    ```env
    GROQ_API_KEY=your_groq_api_key_here
@@ -143,12 +142,11 @@ Get your keys:
 ### Project Structure
 
 ```
-listenos-app/
+ListenOS/
 ├── package.json          # Node.js dependencies
 ├── next.config.ts        # Next.js configuration
-├── tailwind.config.ts    # Tailwind CSS configuration
 ├── src/                  # Frontend source
-└── src-tauri/
+└── backend/
     ├── Cargo.toml        # Rust dependencies
     ├── tauri.conf.json   # Tauri configuration
     └── src/              # Rust source
@@ -203,6 +201,20 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
+## 📜 License
+
+**PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED**
+
+Copyright (c) 2025 **EvidentSphere**. All Rights Reserved.
+
+This software is proprietary and confidential. Unauthorized copying, modification, 
+distribution, or use of this software, via any medium, is strictly prohibited.
+
+See [LICENSE](LICENSE) for full terms and conditions.
+
+---
+
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/devrajsingh15">Devraj Singh</a>
+  <strong>Developed by EvidentSphere</strong><br>
+  © 2025 EvidentSphere. All Rights Reserved.
 </p>
