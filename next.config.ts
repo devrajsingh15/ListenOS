@@ -14,6 +14,14 @@ const nextConfig: NextConfig = {
 
   // Disable dev indicator that might show up in the overlay
   devIndicators: false,
+
+  // Explicitly set the workspace root to avoid scanning outside the project
+  // and ignore the backend directory which contains generated binary/rust files
+  experimental: {
+    turbopack: {
+      root: ".",
+    },
+  },
 };
 
 export default nextConfig;

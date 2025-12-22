@@ -121,7 +121,7 @@ pub fn run() {
                             }
                             
                             let _ = assistant.show();
-                            let _ = assistant.set_focus();
+                            // Don't steal focus - let user keep typing in their active app
                             let _ = assistant.emit("shortcut-pressed", ());
                         } else if event.state == ShortcutState::Released {
                             log::info!("Ctrl+Space released - processing");
@@ -133,6 +133,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             // Voice

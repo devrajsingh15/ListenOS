@@ -20,7 +20,7 @@ export async function checkForUpdates(silent = true) {
 
       // Start the update
       await update.downloadAndInstall((event) => {
-        switch (event.status) {
+        switch (event.event) {
           case 'Started':
             contentLength = event.data.contentLength;
             console.log(`Started downloading ${contentLength} bytes`);
