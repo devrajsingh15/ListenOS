@@ -21,6 +21,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-deep-link = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

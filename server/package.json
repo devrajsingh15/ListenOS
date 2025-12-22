@@ -1,0 +1,23 @@
+{
+  "name": "listenos-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.1",
+    "next": "16.1.0",
+    "postgres": "^3.4.7",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "drizzle-kit": "^0.31.0",
+    "typescript": "^5"
+  }
+}

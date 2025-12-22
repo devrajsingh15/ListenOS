@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { isTauri } from "@/lib/tauri";
+import { checkForUpdates } from "@/lib/updater";
+import { useAuth } from "@/context/AuthContext";
 import {
   Settings02Icon,
   ComputerIcon,
@@ -13,6 +16,9 @@ import {
   CreditCardIcon,
   ShieldUserIcon,
   Cancel01Icon,
+  Download04Icon,
+  Loading03Icon,
+  CheckmarkCircle02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -48,6 +54,8 @@ const settingsNavItems: SettingsNavItem[] = [
   { id: "billing", label: "Plans and Billing", icon: CreditCardIcon, category: "account" },
   { id: "privacy", label: "Data and Privacy", icon: ShieldUserIcon, category: "account" },
 ];
+
+const APP_VERSION = "0.1.0";
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
@@ -130,12 +138,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
               {/* Version */}
               <div className="mt-auto px-3 pt-4">
-                <span className="text-xs text-muted-foreground">ListenOS v1.0.0</span>
+                <span className="text-xs text-muted-foreground">ListenOS v{APP_VERSION}</span>
               </div>
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 p-6">
+            <div className="flex-1 overflow-y-auto p-6">
               {/* Close Button */}
               <button
                 onClick={onClose}
@@ -155,6 +163,59 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 }
 
 function SettingsContent({ section }: { section: SettingsSection }) {
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const { user, subscription, settings, signIn, signOut, updateSettings, isAuthenticated } = useAuth();
+
+  // Local state for system settings
+  const [startOnLogin, setStartOnLogin] = useState(settings?.startOnLogin ?? true);
+  const [showInTray, setShowInTray] = useState(settings?.showInTray ?? true);
+  const [language, setLanguage] = useState(settings?.language ?? "en");
+
+  // Update local state when settings change
+  useEffect(() => {
+    if (settings) {
+      setStartOnLogin(settings.startOnLogin);
+      setShowInTray(settings.showInTray);
+      setLanguage(settings.language);
+    }
+  }, [settings]);
+
+  const handleCheckUpdates = useCallback(async () => {
+    if (!isTauri()) {
+      setUpdateStatus("Updates only available in desktop app");
+      return;
+    }
+    
+    setIsCheckingUpdates(true);
+    setUpdateStatus(null);
+    
+    try {
+      await checkForUpdates(false);
+      setUpdateStatus("You're on the latest version!");
+    } catch (error) {
+      console.error("Update check failed:", error);
+      setUpdateStatus("Failed to check for updates");
+    } finally {
+      setIsCheckingUpdates(false);
+    }
+  }, []);
+
+  const handleStartOnLoginChange = useCallback(async (checked: boolean) => {
+    setStartOnLogin(checked);
+    await updateSettings({ startOnLogin: checked });
+  }, [updateSettings]);
+
+  const handleShowInTrayChange = useCallback(async (checked: boolean) => {
+    setShowInTray(checked);
+    await updateSettings({ showInTray: checked });
+  }, [updateSettings]);
+
+  const handleLanguageChange = useCallback(async (newLanguage: string) => {
+    setLanguage(newLanguage);
+    await updateSettings({ language: newLanguage });
+  }, [updateSettings]);
+
   switch (section) {
     case "general":
       return (
@@ -163,18 +224,57 @@ function SettingsContent({ section }: { section: SettingsSection }) {
           <div className="space-y-6">
             <SettingsRow
               label="Keyboard shortcuts"
-              description="Hold Ctrl + Space and speak."
-              action={<button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">Change</button>}
+              description={settings?.hotkey || "Hold Ctrl + Space and speak."}
+              action={
+                <button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">
+                  Change
+                </button>
+              }
             />
             <SettingsRow
               label="Microphone"
               description="Auto-detect (Default)"
-              action={<button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">Change</button>}
+              action={
+                <button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">
+                  Change
+                </button>
+              }
             />
             <SettingsRow
               label="Languages"
-              description="English"
-              action={<button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">Change</button>}
+              description={language === "en" ? "English" : language}
+              action={
+                <select
+                  value={language}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
+                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover"
+                >
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="zh">Chinese</option>
+                  <option value="ja">Japanese</option>
+                </select>
+              }
+            />
+            <SettingsRow
+              label="Check for updates"
+              description={updateStatus || "Check if a new version is available"}
+              action={
+                <button 
+                  onClick={handleCheckUpdates}
+                  disabled={isCheckingUpdates}
+                  className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                >
+                  <HugeiconsIcon 
+                    icon={isCheckingUpdates ? Loading03Icon : Download04Icon} 
+                    size={16} 
+                    className={isCheckingUpdates ? "animate-spin" : ""}
+                  />
+                  {isCheckingUpdates ? "Checking..." : "Check now"}
+                </button>
+              }
             />
           </div>
         </div>
@@ -187,12 +287,22 @@ function SettingsContent({ section }: { section: SettingsSection }) {
             <SettingsRow
               label="Start on login"
               description="Automatically start ListenOS when you log in"
-              action={<ToggleSwitch defaultChecked />}
+              action={
+                <ToggleSwitch 
+                  checked={startOnLogin} 
+                  onChange={handleStartOnLoginChange}
+                />
+              }
             />
             <SettingsRow
               label="Show in menu bar"
               description="Display ListenOS icon in the system tray"
-              action={<ToggleSwitch defaultChecked />}
+              action={
+                <ToggleSwitch 
+                  checked={showInTray} 
+                  onChange={handleShowInTrayChange}
+                />
+              }
             />
           </div>
         </div>
@@ -201,53 +311,182 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Vibe coding</h2>
-          <p className="text-muted">Configure voice-to-code settings for development workflows.</p>
+          <p className="text-muted mb-4">Configure voice-to-code settings for development workflows.</p>
+          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
+            <p className="text-sm text-muted">Coming soon! Voice-to-code features are being developed.</p>
+          </div>
         </div>
       );
     case "experimental":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Experimental</h2>
-          <p className="text-muted">Try out new features before they&apos;re released.</p>
+          <p className="text-muted mb-4">Try out new features before they&apos;re released.</p>
+          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
+            <p className="text-sm text-muted">No experimental features available at this time.</p>
+          </div>
         </div>
       );
     case "account":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Account</h2>
-          <div className="space-y-6">
-            <SettingsRow
-              label="Email"
-              description="user@example.com"
-              action={<button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">Edit</button>}
-            />
-            <SettingsRow
-              label="Sign out"
-              description="Sign out of your account"
-              action={<button className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100">Sign out</button>}
-            />
-          </div>
+          {isAuthenticated && user ? (
+            <div className="space-y-6">
+              <SettingsRow
+                label="Email"
+                description={user.email}
+                action={<span className="text-sm text-muted">Managed by WorkOS</span>}
+              />
+              {user.firstName && (
+                <SettingsRow
+                  label="Name"
+                  description={`${user.firstName}${user.lastName ? ` ${user.lastName}` : ""}`}
+                  action={<span className="text-sm text-muted">Managed by WorkOS</span>}
+                />
+              )}
+              <SettingsRow
+                label="Sign out"
+                description="Sign out of your account"
+                action={
+                  <button 
+                    onClick={signOut}
+                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100"
+                  >
+                    Sign out
+                  </button>
+                }
+              />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-muted">Sign in to sync your settings and unlock premium features.</p>
+              <button
+                onClick={signIn}
+                className="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+              >
+                Sign in with WorkOS
+              </button>
+            </div>
+          )}
         </div>
       );
     case "team":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Team</h2>
-          <p className="text-muted">Manage your team members and shared settings.</p>
+          {isAuthenticated ? (
+            <div className="rounded-lg border border-border bg-sidebar-bg p-4">
+              <p className="text-sm text-muted">Team features are available on the Team plan. Upgrade to invite team members.</p>
+            </div>
+          ) : (
+            <p className="text-muted">Sign in to manage your team.</p>
+          )}
         </div>
       );
     case "billing":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Plans and Billing</h2>
-          <p className="text-muted">Manage your subscription and payment methods.</p>
+          {isAuthenticated ? (
+            <div className="space-y-6">
+              {/* Current Plan */}
+              <div className="rounded-lg border border-border p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-lg font-semibold text-foreground">
+                    {subscription?.plan === "pro" ? "Pro Plan" : subscription?.plan === "team" ? "Team Plan" : "Free Plan"}
+                  </h3>
+                  <span className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium",
+                    subscription?.status === "active" 
+                      ? "bg-green-100 text-green-700" 
+                      : "bg-yellow-100 text-yellow-700"
+                  )}>
+                    {subscription?.status || "Active"}
+                  </span>
+                </div>
+                <p className="text-sm text-muted">
+                  {subscription?.plan === "free" 
+                    ? "50 voice commands per day with basic features"
+                    : subscription?.plan === "pro"
+                    ? "Unlimited voice commands with advanced AI features"
+                    : "Team collaboration with shared custom commands"
+                  }
+                </p>
+              </div>
+
+              {/* Available Plans */}
+              <div className="grid gap-4">
+                <PlanCard
+                  name="Free"
+                  price={0}
+                  features={[
+                    "50 voice commands/day",
+                    "Basic transcription",
+                    "Standard actions",
+                  ]}
+                  isCurrent={subscription?.plan === "free"}
+                />
+                <PlanCard
+                  name="Pro"
+                  price={9.99}
+                  features={[
+                    "Unlimited voice commands",
+                    "Advanced AI responses",
+                    "Priority processing",
+                    "Custom commands",
+                    "Email support",
+                  ]}
+                  isCurrent={subscription?.plan === "pro"}
+                />
+                <PlanCard
+                  name="Team"
+                  price={29.99}
+                  features={[
+                    "Everything in Pro",
+                    "Team management",
+                    "Shared custom commands",
+                    "Analytics dashboard",
+                    "Priority support",
+                  ]}
+                  isCurrent={subscription?.plan === "team"}
+                />
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted">Sign in to manage your subscription.</p>
+          )}
         </div>
       );
     case "privacy":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Data and Privacy</h2>
-          <p className="text-muted">Control how your data is stored and processed.</p>
+          <div className="space-y-6">
+            <SettingsRow
+              label="Voice data"
+              description="Voice recordings are processed locally and not stored"
+              action={<span className="text-sm text-green-600">Secure</span>}
+            />
+            <SettingsRow
+              label="Command history"
+              description="Clear your command history from this device"
+              action={
+                <button className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100">
+                  Clear history
+                </button>
+              }
+            />
+            <SettingsRow
+              label="Delete account"
+              description="Permanently delete your account and all data"
+              action={
+                <button className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100">
+                  Delete account
+                </button>
+              }
+            />
+          </div>
         </div>
       );
     default:
@@ -275,12 +514,16 @@ function SettingsRow({
   );
 }
 
-function ToggleSwitch({ defaultChecked = false }: { defaultChecked?: boolean }) {
-  const [checked, setChecked] = useState(defaultChecked);
-
+function ToggleSwitch({ 
+  checked, 
+  onChange 
+}: { 
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
   return (
     <button
-      onClick={() => setChecked(!checked)}
+      onClick={() => onChange(!checked)}
       className={cn(
         "relative h-6 w-11 rounded-full transition-colors",
         checked ? "bg-primary" : "bg-border"
@@ -296,3 +539,48 @@ function ToggleSwitch({ defaultChecked = false }: { defaultChecked?: boolean }) 
   );
 }
 
+function PlanCard({
+  name,
+  price,
+  features,
+  isCurrent,
+}: {
+  name: string;
+  price: number;
+  features: string[];
+  isCurrent: boolean;
+}) {
+  return (
+    <div className={cn(
+      "rounded-lg border p-4",
+      isCurrent ? "border-primary bg-primary/5" : "border-border"
+    )}>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="font-semibold text-foreground">{name}</h3>
+          <p className="text-lg font-bold text-foreground">
+            {price === 0 ? "Free" : `$${price}/mo`}
+          </p>
+        </div>
+        {isCurrent ? (
+          <span className="flex items-center gap-1 text-sm text-primary">
+            <HugeiconsIcon icon={CheckmarkCircle02Icon} size={16} />
+            Current
+          </span>
+        ) : (
+          <button className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover">
+            Upgrade
+          </button>
+        )}
+      </div>
+      <ul className="space-y-1">
+        {features.map((feature, i) => (
+          <li key={i} className="flex items-center gap-2 text-sm text-muted">
+            <HugeiconsIcon icon={CheckmarkCircle02Icon} size={14} className="text-green-500" />
+            {feature}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
