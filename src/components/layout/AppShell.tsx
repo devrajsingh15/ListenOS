@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { Sidebar } from "./Sidebar";
 import { SettingsModal } from "./SettingsModal";
 import { TranscriptionProvider } from "@/context/TranscriptionContext";
+import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface AppShellProps {
@@ -16,11 +17,26 @@ interface Toast {
   type: "info" | "command" | "error";
 }
 
+const ONBOARDING_COMPLETE_KEY = "listenos_onboarding_complete";
+
+// Check onboarding status synchronously to avoid flash
+function getInitialOnboardingState(): boolean {
+  if (typeof window === "undefined") return false;
+  return !localStorage.getItem(ONBOARDING_COMPLETE_KEY);
+}
+
 function AppShellContent({ children }: AppShellProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(getInitialOnboardingState);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const showToast = useCallback((message: string, type: Toast["type"] = "info") => {
+  const handleOnboardingComplete = useCallback(() => {
+    localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
+    setShowOnboarding(false);
+  }, []);
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _showToast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = Date.now().toString();
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
@@ -66,6 +82,12 @@ function AppShellContent({ children }: AppShellProps) {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+      />
+
+      {/* Onboarding Modal */}
+      <OnboardingModal
+        isOpen={showOnboarding}
+        onComplete={handleOnboardingComplete}
       />
     </>
   );

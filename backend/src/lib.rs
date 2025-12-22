@@ -11,6 +11,9 @@ mod system;
 mod config;
 mod cloud;
 mod streaming;
+mod conversation;
+mod clipboard;
+mod integrations;
 
 use tauri::{
     Emitter, Manager, AppHandle,
@@ -26,6 +29,9 @@ pub use commands::*;
 pub use config::AppConfig;
 pub use cloud::{CloudConfig, VoiceContext, VoiceMode};
 pub use streaming::{AudioStreamer, AudioAccumulator, SAMPLE_RATE};
+pub use conversation::{ConversationMemory, ConversationStore, Message, Role, Fact};
+pub use clipboard::ClipboardService;
+pub use integrations::{IntegrationManager, AppIntegration};
 
 /// Global application state
 pub struct AppState {
@@ -38,10 +44,28 @@ pub struct AppState {
     pub is_processing: Arc<Mutex<bool>>,
     pub current_context: Arc<Mutex<VoiceContext>>,
     pub history: Arc<Mutex<Vec<VoiceProcessingResult>>>,
+    // New: Conversation memory for multi-turn dialogues
+    pub conversation: Arc<Mutex<ConversationMemory>>,
+    pub conversation_store: Arc<std::sync::Mutex<Option<ConversationStore>>>,
+    // New: Clipboard service
+    pub clipboard: Arc<Mutex<ClipboardService>>,
+    // New: App integrations
+    pub integrations: Arc<Mutex<IntegrationManager>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        // Initialize conversation store (may fail, that's ok)
+        let conversation_store = ConversationStore::new().ok();
+        
+        // Load facts from store if available
+        let mut conversation = ConversationMemory::new_session();
+        if let Some(ref store) = conversation_store {
+            if let Ok(facts) = store.load_facts() {
+                conversation.extracted_facts = facts;
+            }
+        }
+
         Self {
             audio: Arc::new(Mutex::new(AudioState::default())),
             config: Arc::new(Mutex::new(AppConfig::default())),
@@ -52,6 +76,10 @@ impl Default for AppState {
             is_processing: Arc::new(Mutex::new(false)),
             current_context: Arc::new(Mutex::new(VoiceContext::default())),
             history: Arc::new(Mutex::new(Vec::new())),
+            conversation: Arc::new(Mutex::new(conversation)),
+            conversation_store: Arc::new(std::sync::Mutex::new(conversation_store)),
+            clipboard: Arc::new(Mutex::new(ClipboardService::new())),
+            integrations: Arc::new(Mutex::new(IntegrationManager::new())),
         }
     }
 }
@@ -119,6 +147,25 @@ pub fn run() {
             // Config
             commands::get_config,
             commands::set_config,
+            // Conversation
+            commands::get_conversation,
+            commands::clear_conversation,
+            commands::new_conversation_session,
+            // Clipboard
+            commands::get_clipboard,
+            commands::set_clipboard,
+            commands::get_clipboard_history,
+            // Integrations
+            commands::get_integrations,
+            commands::set_integration_enabled,
+            // Custom Commands
+            commands::get_custom_commands,
+            commands::get_command_templates,
+            commands::save_custom_command,
+            commands::delete_custom_command,
+            commands::set_custom_command_enabled,
+            commands::export_custom_commands,
+            commands::import_custom_commands,
             // Data
             get_history,
             clear_history,

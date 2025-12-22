@@ -208,7 +208,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Experimental</h2>
-          <p className="text-muted">Try out new features before they're released.</p>
+          <p className="text-muted">Try out new features before they&apos;re released.</p>
         </div>
       );
     case "account":

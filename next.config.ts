@@ -13,11 +13,7 @@ const nextConfig: NextConfig = {
   trailingSlash: true,
 
   // Disable dev indicator that might show up in the overlay
-  devIndicators: {
-    appIsrStatus: false,
-    buildActivity: false,
-    buildActivityPosition: "bottom-right",
-  },
+  devIndicators: false,
 };
 
 export default nextConfig;

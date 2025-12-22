@@ -13,6 +13,10 @@ import {
   GiftIcon,
   Settings02Icon,
   HelpCircleIcon,
+  Message01Icon,
+  CommandIcon,
+  Copy01Icon,
+  PlugIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -20,14 +24,38 @@ interface NavItem {
   label: string;
   href: string;
   icon: typeof Home03Icon;
+  isNew?: boolean;
 }
 
-const mainNavItems: NavItem[] = [
-  { label: "Dashboard", href: "/", icon: Home03Icon },
-  { label: "Dictionary", href: "/dictionary", icon: Book02Icon },
-  { label: "Snippets", href: "/snippets", icon: Scissor01Icon },
-  { label: "Tone", href: "/tone", icon: TextFontIcon },
-  { label: "Notes", href: "/notes", icon: NoteIcon },
+interface NavSection {
+  title?: string;
+  items: NavItem[];
+}
+
+const navSections: NavSection[] = [
+  {
+    items: [
+      { label: "Dashboard", href: "/", icon: Home03Icon },
+    ],
+  },
+  {
+    title: "AI Assistant",
+    items: [
+      { label: "Conversation", href: "/conversation", icon: Message01Icon, isNew: true },
+      { label: "Commands", href: "/commands", icon: CommandIcon, isNew: true },
+      { label: "Clipboard", href: "/clipboard", icon: Copy01Icon, isNew: true },
+      { label: "Integrations", href: "/integrations", icon: PlugIcon, isNew: true },
+    ],
+  },
+  {
+    title: "Tools",
+    items: [
+      { label: "Dictionary", href: "/dictionary", icon: Book02Icon },
+      { label: "Snippets", href: "/snippets", icon: Scissor01Icon },
+      { label: "Tone", href: "/tone", icon: TextFontIcon },
+      { label: "Notes", href: "/notes", icon: NoteIcon },
+    ],
+  },
 ];
 
 interface SidebarProps {
@@ -63,34 +91,48 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
       </div>
 
       {/* Main Navigation */}
-      <nav className="flex-1 px-3 py-2">
-        <ul className="space-y-1">
-          {mainNavItems.map((item) => {
-            const isActive = pathname === item.href;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-sidebar-active text-foreground"
-                      : "text-muted hover:bg-sidebar-hover hover:text-foreground"
-                  )}
-                >
-                  <HugeiconsIcon
-                    icon={item.icon}
-                    size={18}
-                    className={cn(
-                      isActive ? "text-foreground" : "text-muted"
-                    )}
-                  />
-                  {item.label}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+      <nav className="flex-1 overflow-y-auto px-3 py-2">
+        {navSections.map((section, sectionIndex) => (
+          <div key={sectionIndex} className={sectionIndex > 0 ? "mt-4" : ""}>
+            {section.title && (
+              <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
+                {section.title}
+              </h3>
+            )}
+            <ul className="space-y-1">
+              {section.items.map((item) => {
+                const isActive = pathname === item.href;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={cn(
+                        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-sidebar-active text-foreground"
+                          : "text-muted hover:bg-sidebar-hover hover:text-foreground"
+                      )}
+                    >
+                      <HugeiconsIcon
+                        icon={item.icon}
+                        size={18}
+                        className={cn(
+                          isActive ? "text-foreground" : "text-muted"
+                        )}
+                      />
+                      {item.label}
+                      {item.isNew && (
+                        <span className="ml-auto rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                          NEW
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
       {/* Bottom Actions */}

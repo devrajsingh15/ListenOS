@@ -3,9 +3,11 @@
 //! Cloud-first architecture with embedded API keys.
 //! Users just speak - we handle everything.
 
+pub mod custom;
+
 use crate::AppState;
 use crate::audio::AudioDevice;
-use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode};
+use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -42,6 +44,10 @@ pub struct VoiceProcessingResult {
     pub transcription: TranscriptionResult,
     pub action: ActionResultResponse,
     pub executed: bool,
+    /// AI response text for conversational actions
+    pub response_text: Option<String>,
+    /// Session ID for conversation continuity
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +55,7 @@ pub struct ActionResultResponse {
     pub action_type: String,
     pub payload: serde_json::Value,
     pub refined_text: Option<String>,
+    pub response_text: Option<String>,
 }
 
 // ============ Core Voice Commands ============
@@ -189,8 +196,34 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         return Err("No speech detected.".to_string());
     }
 
-    // Process intent with LLM
-    let action = match client.process_intent(&transcription.text, &context).await {
+    // Get conversation context for multi-turn dialogues
+    let (conv_context, session_id) = {
+        let mut conversation = state.conversation.lock().await;
+        
+        // Add user message to conversation
+        conversation.add_user_message(transcription.text.clone());
+        
+        // Build conversation context for LLM
+        let clipboard_preview = {
+            let clipboard = state.clipboard.lock().await;
+            clipboard.get_preview(200).ok()
+        };
+        
+        let ctx = ConversationContext {
+            history: conversation.format_for_llm(),
+            last_action: conversation.last_action.clone(),
+            last_payload: conversation.last_action_payload.clone(),
+            clipboard_preview,
+            user_facts: conversation.extracted_facts.iter()
+                .map(|f| format!("{}: {}", f.key, f.value))
+                .collect(),
+        };
+        
+        (ctx, conversation.session_id.clone())
+    };
+
+    // Process intent with LLM (with conversation context)
+    let action = match client.process_intent_with_context(&transcription.text, &context, &conv_context).await {
         Ok(result) => {
             log::info!("Action: {:?}", result.action_type);
             result
@@ -201,12 +234,36 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 action_type: ActionType::TypeText,
                 payload: serde_json::json!({}),
                 refined_text: Some(transcription.text.clone()),
+                response_text: None,
+                requires_confirmation: false,
             }
         }
     };
 
     // Execute the action
-    let executed = execute_action_internal(&action).await.is_ok();
+    let executed = execute_action_internal(&action, &state).await.is_ok();
+
+    // Update conversation with assistant response
+    {
+        let mut conversation = state.conversation.lock().await;
+        let response_content = action.response_text.clone()
+            .or_else(|| action.refined_text.clone())
+            .unwrap_or_else(|| format!("Executed: {:?}", action.action_type));
+        
+        conversation.add_assistant_message(
+            response_content,
+            Some(action.action_type),
+            Some(executed),
+            Some(action.payload.clone()),
+        );
+
+        // Persist conversation to store
+        if let Ok(store_guard) = state.conversation_store.lock() {
+            if let Some(ref store) = *store_guard {
+                let _ = store.save_session(&conversation);
+            }
+        }
+    }
 
     // Processing logic finished
     let result = VoiceProcessingResult {
@@ -215,8 +272,11 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
             action_type: format!("{:?}", action.action_type),
             payload: action.payload,
             refined_text: action.refined_text,
+            response_text: action.response_text.clone(),
         },
         executed,
+        response_text: action.response_text,
+        session_id,
     };
 
     // Save to history
@@ -277,8 +337,53 @@ pub async fn set_audio_device(
 
 // ============ Action Execution ============
 
-async fn execute_action_internal(action: &ActionResult) -> Result<CommandResult, String> {
+async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
     match action.action_type {
+        // Conversational actions - no system action needed
+        ActionType::Respond => {
+            Ok(CommandResult {
+                success: true,
+                message: action.response_text.clone().unwrap_or_else(|| "Response sent".to_string()),
+                output: action.response_text.clone(),
+            })
+        }
+        
+        ActionType::Clarify => {
+            Ok(CommandResult {
+                success: true,
+                message: action.response_text.clone().unwrap_or_else(|| "Clarification requested".to_string()),
+                output: action.response_text.clone(),
+            })
+        }
+        
+        // Clipboard actions
+        ActionType::ClipboardFormat | ActionType::ClipboardTranslate | 
+        ActionType::ClipboardSummarize | ActionType::ClipboardClean => {
+            execute_clipboard_action(action, state).await
+        }
+        
+        // App integration actions
+        ActionType::SpotifyControl => {
+            execute_spotify_action(action, state).await
+        }
+        
+        ActionType::DiscordControl => {
+            execute_discord_action(action, state).await
+        }
+        
+        ActionType::SystemControl => {
+            execute_system_action(action, state).await
+        }
+        
+        ActionType::CustomCommand => {
+            // TODO: Implement custom command execution
+            Ok(CommandResult {
+                success: false,
+                message: "Custom commands not yet implemented".to_string(),
+                output: None,
+            })
+        }
+
         ActionType::TypeText => {
             // Get text from refined_text or payload
             let text = if let Some(ref refined) = action.refined_text {
@@ -592,12 +697,14 @@ async fn execute_action_internal(action: &ActionResult) -> Result<CommandResult,
                         action_type: step_action_type,
                         payload: step["payload"].clone(),
                         refined_text: step["refined_text"].as_str().map(|s| s.to_string()),
+                        response_text: None,
+                        requires_confirmation: false,
                     };
                     
                     log::info!("Step {}: {:?}", i + 1, step_action_type);
                     
                     // Execute and continue regardless of result
-                    if let Err(e) = Box::pin(execute_action_internal(&step_result)).await {
+                    if let Err(e) = Box::pin(execute_action_internal(&step_result, state)).await {
                         log::warn!("Step {} failed: {}", i + 1, e);
                     }
                     
@@ -689,6 +796,184 @@ pub async fn run_system_command(command: String) -> Result<CommandResult, String
     }
 }
 
+// ============ Clipboard Action Helpers ============
+
+async fn execute_clipboard_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+    // Get current clipboard content
+    let content = {
+        let clipboard = state.clipboard.lock().await;
+        clipboard.get_current()?
+    };
+
+    if content.trim().is_empty() {
+        return Ok(CommandResult {
+            success: false,
+            message: "Clipboard is empty".to_string(),
+            output: None,
+        });
+    }
+
+    let operation = match action.action_type {
+        ActionType::ClipboardFormat => "format",
+        ActionType::ClipboardTranslate => "translate",
+        ActionType::ClipboardSummarize => "summarize",
+        ActionType::ClipboardClean => "clean",
+        _ => return Err("Invalid clipboard action".to_string()),
+    };
+
+    // Process with LLM
+    let client = GroqClient::new();
+    let result = client.process_clipboard(&content, operation, &action.payload).await?;
+
+    // Set the result back to clipboard
+    {
+        let clipboard = state.clipboard.lock().await;
+        clipboard.set_content(result.clone())?;
+    }
+
+    Ok(CommandResult {
+        success: true,
+        message: format!("Clipboard {}: done", operation),
+        output: Some(result),
+    })
+}
+
+// ============ Integration Action Helpers ============
+
+async fn execute_spotify_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+    let integrations = state.integrations.lock().await;
+    
+    let spotify_action = action.payload.get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("play_pause");
+    
+    let spotify_action_id = format!("spotify_{}", spotify_action);
+    
+    match integrations.execute("spotify", &spotify_action_id, &action.payload) {
+        Ok(result) => Ok(CommandResult {
+            success: result.success,
+            message: result.message,
+            output: result.data.map(|d| d.to_string()),
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+async fn execute_discord_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+    let integrations = state.integrations.lock().await;
+    
+    let discord_action = action.payload.get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("mute");
+    
+    let discord_action_id = format!("discord_{}", discord_action);
+    
+    match integrations.execute("discord", &discord_action_id, &action.payload) {
+        Ok(result) => Ok(CommandResult {
+            success: result.success,
+            message: result.message,
+            output: result.data.map(|d| d.to_string()),
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+async fn execute_system_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+    let integrations = state.integrations.lock().await;
+    
+    let system_action = action.payload.get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("lock");
+    
+    let system_action_id = format!("system_{}", system_action);
+    
+    match integrations.execute("system", &system_action_id, &action.payload) {
+        Ok(result) => Ok(CommandResult {
+            success: result.success,
+            message: result.message,
+            output: result.data.map(|d| d.to_string()),
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+// ============ Conversation Commands ============
+
+/// Get conversation history
+#[tauri::command]
+pub async fn get_conversation(state: State<'_, AppState>) -> Result<Vec<crate::conversation::Message>, String> {
+    let conversation = state.conversation.lock().await;
+    Ok(conversation.messages.clone())
+}
+
+/// Clear conversation history
+#[tauri::command]
+pub async fn clear_conversation(state: State<'_, AppState>) -> Result<(), String> {
+    let mut conversation = state.conversation.lock().await;
+    conversation.clear();
+    Ok(())
+}
+
+/// Start a new conversation session
+#[tauri::command]
+pub async fn new_conversation_session(state: State<'_, AppState>) -> Result<String, String> {
+    let mut conversation = state.conversation.lock().await;
+    
+    // Save current session
+    if let Ok(store_guard) = state.conversation_store.lock() {
+        if let Some(ref store) = *store_guard {
+            let _ = store.save_session(&conversation);
+        }
+    }
+    
+    // Create new session
+    *conversation = crate::conversation::ConversationMemory::new_session();
+    Ok(conversation.session_id.clone())
+}
+
+// ============ Clipboard Commands ============
+
+/// Get clipboard content
+#[tauri::command]
+pub async fn get_clipboard(state: State<'_, AppState>) -> Result<String, String> {
+    let clipboard = state.clipboard.lock().await;
+    clipboard.get_current()
+}
+
+/// Set clipboard content
+#[tauri::command]
+pub async fn set_clipboard(state: State<'_, AppState>, content: String) -> Result<(), String> {
+    let clipboard = state.clipboard.lock().await;
+    clipboard.set_content(content)
+}
+
+/// Get clipboard history
+#[tauri::command]
+pub async fn get_clipboard_history(state: State<'_, AppState>, limit: Option<usize>) -> Result<Vec<crate::clipboard::ClipboardEntry>, String> {
+    let clipboard = state.clipboard.lock().await;
+    Ok(clipboard.get_history(limit.unwrap_or(20)))
+}
+
+// ============ Integration Commands ============
+
+/// Get list of available integrations
+#[tauri::command]
+pub async fn get_integrations(state: State<'_, AppState>) -> Result<Vec<crate::integrations::IntegrationInfo>, String> {
+    let integrations = state.integrations.lock().await;
+    Ok(integrations.list_integrations())
+}
+
+/// Enable or disable an integration
+#[tauri::command]
+pub async fn set_integration_enabled(
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<bool, String> {
+    let mut integrations = state.integrations.lock().await;
+    Ok(integrations.set_enabled(&name, enabled))
+}
+
 // ============ Context Commands ============
 
 /// Set voice mode (dictation or command)
@@ -757,4 +1042,54 @@ pub async fn set_config(
 
     *current_config = config;
     Ok(true)
+}
+
+// ============ Custom Commands ============
+
+/// Get all custom commands
+#[tauri::command]
+pub async fn get_custom_commands() -> Result<Vec<custom::CustomCommand>, String> {
+    let store = custom::CustomCommandsStore::new()?;
+    store.get_all_commands()
+}
+
+/// Get built-in command templates
+#[tauri::command]
+pub async fn get_command_templates() -> Result<Vec<custom::CustomCommand>, String> {
+    Ok(custom::get_builtin_templates())
+}
+
+/// Save a custom command
+#[tauri::command]
+pub async fn save_custom_command(command: custom::CustomCommand) -> Result<(), String> {
+    let store = custom::CustomCommandsStore::new()?;
+    store.save_command(&command)
+}
+
+/// Delete a custom command
+#[tauri::command]
+pub async fn delete_custom_command(id: String) -> Result<(), String> {
+    let store = custom::CustomCommandsStore::new()?;
+    store.delete_command(&id)
+}
+
+/// Enable or disable a custom command
+#[tauri::command]
+pub async fn set_custom_command_enabled(id: String, enabled: bool) -> Result<(), String> {
+    let store = custom::CustomCommandsStore::new()?;
+    store.set_enabled(&id, enabled)
+}
+
+/// Export all custom commands to JSON
+#[tauri::command]
+pub async fn export_custom_commands() -> Result<String, String> {
+    let store = custom::CustomCommandsStore::new()?;
+    store.export_commands()
+}
+
+/// Import custom commands from JSON
+#[tauri::command]
+pub async fn import_custom_commands(json: String) -> Result<usize, String> {
+    let store = custom::CustomCommandsStore::new()?;
+    store.import_commands(&json)
 }

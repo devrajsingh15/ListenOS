@@ -99,19 +99,103 @@ pub struct ActionResult {
     pub action_type: ActionType,
     pub payload: serde_json::Value,
     pub refined_text: Option<String>,
+    /// AI response text for conversational actions (Respond, Clarify)
+    pub response_text: Option<String>,
+    /// Whether this action requires user confirmation
+    pub requires_confirmation: bool,
+}
+
+impl ActionResult {
+    /// Create a simple action result
+    pub fn action(action_type: ActionType, payload: serde_json::Value) -> Self {
+        Self {
+            action_type,
+            payload,
+            refined_text: None,
+            response_text: None,
+            requires_confirmation: false,
+        }
+    }
+
+    /// Create a type text action
+    pub fn type_text(text: String) -> Self {
+        Self {
+            action_type: ActionType::TypeText,
+            payload: serde_json::json!({}),
+            refined_text: Some(text),
+            response_text: None,
+            requires_confirmation: false,
+        }
+    }
+
+    /// Create a conversational response
+    pub fn respond(text: String) -> Self {
+        Self {
+            action_type: ActionType::Respond,
+            payload: serde_json::json!({}),
+            refined_text: None,
+            response_text: Some(text),
+            requires_confirmation: false,
+        }
+    }
+
+    /// Create a clarification request
+    pub fn clarify(question: String) -> Self {
+        Self {
+            action_type: ActionType::Clarify,
+            payload: serde_json::json!({}),
+            refined_text: None,
+            response_text: Some(question),
+            requires_confirmation: false,
+        }
+    }
+}
+
+/// Conversation context for multi-turn dialogues
+#[derive(Debug, Clone, Default)]
+pub struct ConversationContext {
+    /// Recent conversation history formatted for LLM
+    pub history: String,
+    /// Last action taken
+    pub last_action: Option<String>,
+    /// Last action payload
+    pub last_payload: Option<serde_json::Value>,
+    /// Clipboard preview (first 200 chars)
+    pub clipboard_preview: Option<String>,
+    /// Extracted user facts/preferences
+    pub user_facts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionType {
+    // Core actions
     TypeText,
     RunCommand,
     OpenApp,
-    OpenUrl,      // Open a specific URL
+    OpenUrl,
     WebSearch,
     VolumeControl,
-    SendEmail,    // Compose and send email
-    MultiStep,    // Execute multiple steps
+    SendEmail,
+    MultiStep,
     NoAction,
+    
+    // Conversational actions
+    Respond,          // AI responds conversationally (e.g., answering a question)
+    Clarify,          // AI asks for clarification
+    
+    // Clipboard actions
+    ClipboardFormat,    // Format clipboard content
+    ClipboardTranslate, // Translate clipboard content
+    ClipboardSummarize, // Summarize clipboard content
+    ClipboardClean,     // Clean up clipboard text
+    
+    // App integration actions
+    SpotifyControl,     // Control Spotify (play, pause, next, etc.)
+    DiscordControl,     // Control Discord (mute, deafen, etc.)
+    SystemControl,      // System controls (brightness, lock, etc.)
+    
+    // Custom commands
+    CustomCommand,      // Execute a user-defined custom command
 }
 
 /// Groq API client - Ultra-fast transcription and LLM
@@ -172,96 +256,22 @@ impl GroqClient {
     }
 
     /// Process text with Groq LLM for intent classification (Llama 3.3 70B)
-    pub async fn process_intent(&self, text: &str, _context: &VoiceContext) -> Result<ActionResult, String> {
-        let system_prompt = r#"You are Listen OS, an advanced AI assistant that can perform ANY task a human can do on a computer.
+    /// Legacy method - forwards to process_intent_with_context with empty context
+    pub async fn process_intent(&self, text: &str, voice_context: &VoiceContext) -> Result<ActionResult, String> {
+        let conv_context = ConversationContext::default();
+        self.process_intent_with_context(text, voice_context, &conv_context).await
+    }
 
-Your goal is to FULLY COMPLETE the user's request, not just partially. Think step by step.
-
-AVAILABLE ACTIONS:
-1. open_url - Open a SPECIFIC URL (use this for YouTube videos, Gmail compose, specific websites)
-2. open_app - Open an application by name
-3. web_search - Search Google for information
-4. type_text - Type text into the current focused input
-5. send_email - Compose an email (payload: {to, subject, body})
-6. volume_control - Control volume (up/down/mute)
-7. run_command - Run a system command
-8. multi_step - Execute MULTIPLE actions in sequence (payload: {steps: [...]})
-
-CRITICAL RULES:
-1. NEVER stop halfway. COMPLETE the task fully like a human would.
-2. For "play music on YouTube": Use a DIRECT VIDEO URL that auto-plays, like:
-   - Lofi: "https://www.youtube.com/watch?v=jfKfPfyJRdk" (lofi girl - auto plays)
-   - Chill: "https://www.youtube.com/watch?v=5qap5aO4i9A" (lofi hip hop)
-   - Mix: "https://www.youtube.com/watch?v=lTRiuFIWV54" (relaxing music)
-3. For email: Open Gmail compose with pre-filled fields
-4. For complex tasks: Use multi_step with sequential actions
-5. Think step-by-step: What would a human do to FULLY complete this?
-6. If opening an app that needs interaction, add keyboard simulation steps
-
-RESPONSE FORMAT (JSON only):
-{
-  "action": "action_type",
-  "payload": {...},
-  "refined_text": null
-}
-
-For multi_step:
-{
-  "action": "multi_step",
-  "payload": {
-    "steps": [
-      {"action": "open_url", "payload": {"url": "https://youtube.com/watch?v=jfKfPfyJRdk"}},
-      {"action": "run_command", "payload": {"command": "timeout 3"}}
-    ]
-  },
-  "refined_text": null
-}
-
-EXAMPLES:
-
-INPUT: "play some lofi music on YouTube"
-OUTPUT: {"action": "open_url", "payload": {"url": "https://www.youtube.com/watch?v=jfKfPfyJRdk"}, "refined_text": null}
-
-INPUT: "play relaxing music"
-OUTPUT: {"action": "open_url", "payload": {"url": "https://www.youtube.com/watch?v=lTRiuFIWV54"}, "refined_text": null}
-
-INPUT: "open YouTube and play some chill beats"
-OUTPUT: {"action": "open_url", "payload": {"url": "https://www.youtube.com/watch?v=5qap5aO4i9A"}, "refined_text": null}
-
-INPUT: "send an email to john@example.com about the meeting tomorrow"
-OUTPUT: {"action": "open_url", "payload": {"url": "https://mail.google.com/mail/?view=cm&to=john@example.com&su=Meeting+Tomorrow&body=Hi+John%2C%0A%0AI+wanted+to+discuss+the+meeting+tomorrow.%0A%0ABest+regards"}, "refined_text": null}
-
-INPUT: "play some relaxing music on Spotify"
-OUTPUT: {"action": "open_app", "payload": {"app": "spotify"}, "refined_text": null}
-
-INPUT: "search for the best restaurants near me"
-OUTPUT: {"action": "open_url", "payload": {"url": "https://www.google.com/search?q=best+restaurants+near+me"}, "refined_text": null}
-
-INPUT: "open my email and compose a new message to sarah about dinner plans"
-OUTPUT: {"action": "open_url", "payload": {"url": "https://mail.google.com/mail/?view=cm&to=sarah&su=Dinner+Plans&body=Hi+Sarah%2C%0A%0AWould+you+like+to+grab+dinner+together%3F%0A%0ALet+me+know%21"}, "refined_text": null}
-
-INPUT: "hello how are you today"
-OUTPUT: {"action": "type_text", "payload": {}, "refined_text": "Hello, how are you today?"}
-
-INPUT: "thank you so much"
-OUTPUT: {"action": "type_text", "payload": {}, "refined_text": "Thank you so much."}
-
-INPUT: "I really appreciate your help with this project"
-OUTPUT: {"action": "type_text", "payload": {}, "refined_text": "I really appreciate your help with this project."}
-
-INPUT: "open settings"
-OUTPUT: {"action": "open_app", "payload": {"app": "settings"}, "refined_text": null}
-
-INPUT: "volume up"
-OUTPUT: {"action": "volume_control", "payload": {"direction": "up"}, "refined_text": null}
-
-CRITICAL: For type_text, the refined_text is the user's EXACT WORDS with proper formatting.
-You are NOT a chatbot. Do NOT respond to the user. Just type what they said.
-"Thank you" types "Thank you." - NOT "You're welcome!"
-"How are you" types "How are you?" - NOT an answer to the question."#;
-
+    /// Process text with full conversation context for multi-turn dialogues
+    pub async fn process_intent_with_context(
+        &self, 
+        text: &str, 
+        voice_context: &VoiceContext,
+        conv_context: &ConversationContext,
+    ) -> Result<ActionResult, String> {
+        let system_prompt = self.build_system_prompt(voice_context, conv_context);
         let user_message = format!(
-            "User request: \"{}\"\n\nAnalyze and respond with the action(s) needed to FULLY complete this request.",
+            "User request: \"{}\"\n\nAnalyze and respond with the appropriate action.",
             text
         );
 
@@ -272,7 +282,7 @@ You are NOT a chatbot. Do NOT respond to the user. Just type what they said.
                 {"role": "user", "content": user_message}
             ],
             "temperature": 0.2,
-            "max_tokens": 512,
+            "max_tokens": 1024,
             "response_format": {"type": "json_object"}
         });
 
@@ -300,7 +310,146 @@ You are NOT a chatbot. Do NOT respond to the user. Just type what they said.
         let parsed: serde_json::Value = serde_json::from_str(content)
             .unwrap_or(serde_json::json!({"action": "type_text", "refined_text": text}));
 
-        let action_type = match parsed["action"].as_str().unwrap_or("type_text") {
+        self.parse_llm_response(&parsed, text)
+    }
+
+    /// Build the system prompt with context
+    fn build_system_prompt(&self, voice_context: &VoiceContext, conv_context: &ConversationContext) -> String {
+        let mut prompt = String::from(r#"You are ListenOS, an intelligent AI desktop assistant with MEMORY and CONTEXT awareness.
+
+You can have CONVERSATIONS, remember what was said before, and understand context like "that", "it", "the same one".
+
+"#);
+
+        // Add conversation history if available
+        if !conv_context.history.is_empty() {
+            prompt.push_str("=== CONVERSATION HISTORY ===\n");
+            prompt.push_str(&conv_context.history);
+            prompt.push_str("\n\n");
+        }
+
+        // Add context information
+        prompt.push_str("=== CURRENT CONTEXT ===\n");
+        
+        if let Some(ref app) = voice_context.active_app {
+            prompt.push_str(&format!("Active app: {}\n", app));
+        }
+        
+        if let Some(ref clipboard) = conv_context.clipboard_preview {
+            prompt.push_str(&format!("Clipboard preview: \"{}\"\n", clipboard));
+        }
+        
+        if let Some(ref last_action) = conv_context.last_action {
+            prompt.push_str(&format!("Last action: {}\n", last_action));
+            if let Some(ref payload) = conv_context.last_payload {
+                prompt.push_str(&format!("Last payload: {:?}\n", payload));
+            }
+        }
+
+        if !conv_context.user_facts.is_empty() {
+            prompt.push_str("Known user preferences:\n");
+            for fact in &conv_context.user_facts {
+                prompt.push_str(&format!("  - {}\n", fact));
+            }
+        }
+
+        prompt.push_str(&format!("OS: {}\n", voice_context.os));
+        prompt.push_str(&format!("Time: {}\n\n", voice_context.timestamp));
+
+        // Add available actions
+        prompt.push_str(r#"=== AVAILABLE ACTIONS ===
+
+COMPUTER CONTROL:
+- open_url: Open a URL in browser (payload: {url})
+- open_app: Open an application (payload: {app})
+- web_search: Search Google (payload: {query})
+- type_text: Type text (refined_text contains the text)
+- volume_control: Volume up/down/mute (payload: {direction})
+- run_command: Run system command (payload: {command})
+- send_email: Open Gmail compose (payload: {to, subject, body})
+- multi_step: Multiple actions in sequence (payload: {steps: [...]})
+
+CLIPBOARD OPERATIONS (when user mentions clipboard):
+- clipboard_format: Format clipboard content (payload: {format: "bullet"|"numbered"|"paragraph"})
+- clipboard_translate: Translate clipboard (payload: {target_language})
+- clipboard_summarize: Summarize clipboard content
+- clipboard_clean: Clean up clipboard text
+
+APP INTEGRATIONS:
+- spotify_control: Control Spotify (payload: {action: "play"|"pause"|"next"|"previous"|"search", query?})
+- discord_control: Control Discord (payload: {action: "mute"|"deafen"|"disconnect"})
+- system_control: System controls (payload: {action: "lock"|"sleep"|"brightness"|"screenshot", level?})
+
+CONVERSATIONAL:
+- respond: Answer a question or have a conversation (response_text contains your answer)
+- clarify: Ask for more information (response_text contains your question)
+
+=== CONTEXT UNDERSTANDING ===
+
+You MUST understand references to previous context:
+- "that" / "it" / "the same" → refers to last action's target
+- "him" / "her" / "them" → refers to last mentioned person
+- "do it again" / "repeat" → repeat last action
+- "undo" / "cancel" → undo last action if possible
+- "send it to X instead" → modify last email/message recipient
+- "add that to my calendar" → use context from last action
+
+=== RESPONSE FORMAT (JSON only) ===
+
+{
+  "action": "action_type",
+  "payload": {...},
+  "refined_text": "for type_text only",
+  "response_text": "for respond/clarify only",
+  "requires_confirmation": false
+}
+
+=== CRITICAL RULES ===
+
+1. UNDERSTAND CONTEXT: Use conversation history to understand references
+2. NATURAL CONVERSATION: For questions directed at you (not dictation), use "respond" action
+3. DICTATION MODE: If user is clearly dictating (continuous speech meant to be typed), use "type_text"
+4. FOLLOW-UPS: Handle follow-up requests using context from previous actions
+5. CLARIFY when needed: If ambiguous, ask a clarifying question
+6. For type_text: refined_text is the user's EXACT words with proper formatting
+7. For respond: response_text is YOUR conversational response
+
+=== EXAMPLES ===
+
+User: "What's the weather like?"
+→ {"action": "respond", "response_text": "I'd be happy to check that for you! Let me search for the current weather.", "payload": {}}
+(Then a follow-up action could search for weather)
+
+User: "Open Chrome" then later "Open that again"
+→ {"action": "open_app", "payload": {"app": "chrome"}}
+
+User: "Send email to john@test.com" then "Actually send it to sarah instead"  
+→ {"action": "send_email", "payload": {"to": "sarah@test.com", ...}}
+
+User: "Summarize my clipboard"
+→ {"action": "clipboard_summarize", "payload": {}}
+
+User: "Pause the music"
+→ {"action": "spotify_control", "payload": {"action": "pause"}}
+
+User: "Lock my computer"
+→ {"action": "system_control", "payload": {"action": "lock"}}
+
+User: "Hello, how are you?" (in a text input context)
+→ {"action": "type_text", "refined_text": "Hello, how are you?"}
+
+User: "Hey ListenOS, how are you doing?"
+→ {"action": "respond", "response_text": "I'm doing great, thank you for asking! How can I help you today?"}
+"#);
+
+        prompt
+    }
+
+    /// Parse the LLM response into an ActionResult
+    fn parse_llm_response(&self, parsed: &serde_json::Value, _original_text: &str) -> Result<ActionResult, String> {
+        let action_str = parsed["action"].as_str().unwrap_or("type_text");
+        
+        let action_type = match action_str {
             "open_app" => ActionType::OpenApp,
             "open_url" => ActionType::OpenUrl,
             "web_search" => ActionType::WebSearch,
@@ -308,14 +457,97 @@ You are NOT a chatbot. Do NOT respond to the user. Just type what they said.
             "volume_control" => ActionType::VolumeControl,
             "send_email" => ActionType::SendEmail,
             "multi_step" => ActionType::MultiStep,
+            "respond" => ActionType::Respond,
+            "clarify" => ActionType::Clarify,
+            "clipboard_format" => ActionType::ClipboardFormat,
+            "clipboard_translate" => ActionType::ClipboardTranslate,
+            "clipboard_summarize" => ActionType::ClipboardSummarize,
+            "clipboard_clean" => ActionType::ClipboardClean,
+            "spotify_control" => ActionType::SpotifyControl,
+            "discord_control" => ActionType::DiscordControl,
+            "system_control" => ActionType::SystemControl,
+            "custom_command" => ActionType::CustomCommand,
+            "no_action" => ActionType::NoAction,
             _ => ActionType::TypeText,
         };
+
+        let requires_confirmation = parsed["requires_confirmation"]
+            .as_bool()
+            .unwrap_or(false);
 
         Ok(ActionResult {
             action_type,
             payload: parsed["payload"].clone(),
             refined_text: parsed["refined_text"].as_str().map(|s| s.to_string()),
+            response_text: parsed["response_text"].as_str().map(|s| s.to_string()),
+            requires_confirmation,
         })
+    }
+
+    /// Process clipboard operations with LLM
+    pub async fn process_clipboard(&self, content: &str, operation: &str, params: &serde_json::Value) -> Result<String, String> {
+        let prompt = match operation {
+            "format" => {
+                let format_type = params.get("format").and_then(|v| v.as_str()).unwrap_or("paragraph");
+                format!(
+                    "Format the following text as a {}. Only output the formatted text, nothing else:\n\n{}",
+                    format_type, content
+                )
+            }
+            "translate" => {
+                let target = params.get("target_language").and_then(|v| v.as_str()).unwrap_or("Spanish");
+                format!(
+                    "Translate the following text to {}. Only output the translation, nothing else:\n\n{}",
+                    target, content
+                )
+            }
+            "summarize" => {
+                format!(
+                    "Summarize the following text in 2-3 sentences. Only output the summary, nothing else:\n\n{}",
+                    content
+                )
+            }
+            "clean" => {
+                format!(
+                    "Clean up the following text: fix grammar, remove extra whitespace, add proper punctuation. Only output the cleaned text, nothing else:\n\n{}",
+                    content
+                )
+            }
+            _ => return Err(format!("Unknown clipboard operation: {}", operation)),
+        };
+
+        let body = serde_json::json!({
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2048
+        });
+
+        let response = self.client
+            .post("https://api.groq.com/openai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", get_groq_key()))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Groq request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Groq error: {}", error_text));
+        }
+
+        let result: serde_json::Value = response.json().await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        let content = result["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        Ok(content)
     }
 }
 
