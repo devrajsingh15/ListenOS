@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/schema/2.0.0/capabilities",
+  "identifier": "default",
+  "description": "ListenOS capabilities",
+  "windows": [
+    "dashboard",
+    "assistant"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "opener:default",
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-register-all",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-unregister-all",
+    "shell:allow-open",
+    "shell:allow-execute"
+  ]
+}
