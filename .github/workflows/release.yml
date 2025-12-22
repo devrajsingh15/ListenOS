@@ -48,8 +48,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version
-          releaseName: "ListenOS v__VERSION__"
+          tagName: ${{ github.ref_name }}
+          releaseName: "ListenOS ${{ github.ref_name }}"
           releaseBody: "See the assets below to download the latest version of ListenOS."
           releaseDraft: false
           prerelease: false
