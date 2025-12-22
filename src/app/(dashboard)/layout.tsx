@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Theme } from "@radix-ui/themes";
-import { ClerkProvider } from "@clerk/nextjs";
 import { AuthProvider } from "@/context/AuthContext";
 import "../globals.css";
 
@@ -22,16 +21,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
-      <html lang="en" className={inter.variable}>
-        <body className="antialiased">
-          <AuthProvider>
-            <Theme accentColor="violet" grayColor="slate" radius="medium">
-              {children}
-            </Theme>
-          </AuthProvider>
-        </body>
-      </html>
-    </ClerkProvider>
+    <html lang="en" className={inter.variable}>
+      <body className="antialiased">
+        <AuthProvider>
+          <Theme accentColor="violet" grayColor="slate" radius="medium">
+            {children}
+          </Theme>
+        </AuthProvider>
+      </body>
+    </html>
   );
 }

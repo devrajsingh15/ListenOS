@@ -1,10 +1,13 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
-import { useUser, useClerk, useAuth as useClerkAuth } from "@clerk/nextjs";
 
 // API configuration - for syncing with backend database
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+
+// Storage keys
+const STORAGE_KEY_USER = "listenos_user";
+const STORAGE_KEY_TOKEN = "listenos_token";
 
 interface Subscription {
   id: string;
@@ -20,14 +23,16 @@ interface UserSettings {
   showInTray: boolean;
 }
 
+interface User {
+  id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  profilePicture?: string;
+}
+
 interface AuthContextType {
-  user: {
-    id: string;
-    email: string;
-    firstName?: string;
-    lastName?: string;
-    profilePicture?: string;
-  } | null;
+  user: User | null;
   subscription: Subscription | null;
   settings: UserSettings | null;
   isLoading: boolean;
@@ -36,106 +41,133 @@ interface AuthContextType {
   signOut: () => void;
   refreshUser: () => Promise<void>;
   updateSettings: (settings: Partial<UserSettings>) => Promise<void>;
+  handleAuthCallback: (token: string, userData: User) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const { user: clerkUser, isLoaded: isClerkLoaded } = useUser();
-  const { signOut: clerkSignOut, openSignIn } = useClerk();
-  const { getToken, userId } = useClerkAuth();
-  
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [dbUserId, setDbUserId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Sync user with backend database when Clerk user changes
+  // Load stored auth data on mount
   useEffect(() => {
-    if (!clerkUser || !isClerkLoaded) return;
-
-    const syncUserWithBackend = async () => {
-      if (!API_URL) {
-        // If no API URL, we're running locally without backend
-        return;
-      }
-
+    const loadStoredAuth = () => {
       try {
-        // Sync user with our database
-        const response = await fetch(`${API_URL}/api/auth/callback`, {
-          method: "POST",
+        const storedUser = localStorage.getItem(STORAGE_KEY_USER);
+        const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN);
+        
+        if (storedUser && storedToken) {
+          setUser(JSON.parse(storedUser));
+          setToken(storedToken);
+        }
+      } catch (error) {
+        console.error("Failed to load stored auth:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadStoredAuth();
+  }, []);
+
+  // Fetch user data from backend when token is available
+  useEffect(() => {
+    if (!token || !API_URL) return;
+
+    const fetchUserData = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/auth/session`, {
+          method: "GET",
           headers: {
             "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({
-            userId: clerkUser.id,
-          }),
         });
 
         if (response.ok) {
           const data = await response.json();
-          if (data.user?.id) setDbUserId(data.user.id);
           if (data.subscription) setSubscription(data.subscription);
           if (data.settings) setSettings(data.settings);
         }
       } catch (error) {
-        console.error("Failed to sync user with backend:", error);
+        console.error("Failed to fetch user data:", error);
       }
     };
 
-    syncUserWithBackend();
-  }, [clerkUser, isClerkLoaded]);
+    fetchUserData();
+  }, [token]);
+
+  const handleAuthCallback = useCallback((newToken: string, userData: User) => {
+    setToken(newToken);
+    setUser(userData);
+    localStorage.setItem(STORAGE_KEY_TOKEN, newToken);
+    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userData));
+  }, []);
 
   const refreshUser = useCallback(async () => {
-    if (!userId || !API_URL) return;
+    if (!token || !API_URL) return;
 
     try {
       const response = await fetch(`${API_URL}/api/auth/session`, {
-        method: "POST",
+        method: "GET",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          clerkUserId: userId,
-        }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        if (data.user?.id) setDbUserId(data.user.id);
+        if (data.user) {
+          setUser(data.user);
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(data.user));
+        }
         if (data.subscription) setSubscription(data.subscription);
         if (data.settings) setSettings(data.settings);
       }
     } catch (error) {
       console.error("Failed to refresh user data:", error);
     }
-  }, [userId]);
+  }, [token]);
 
   const signIn = useCallback(() => {
-    openSignIn();
-  }, [openSignIn]);
+    // Open the auth URL in the default browser
+    // The deep-link will redirect back to the app after authentication
+    const authUrl = API_URL ? `${API_URL}/sign-in?redirect=listenos://auth/callback` : "";
+    if (authUrl && typeof window !== "undefined") {
+      // Use Tauri shell to open URL if available, otherwise fallback to window.open
+      import("@tauri-apps/plugin-shell").then(({ open }) => {
+        open(authUrl);
+      }).catch(() => {
+        window.open(authUrl, "_blank");
+      });
+    }
+  }, []);
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(() => {
+    setUser(null);
+    setToken(null);
     setSubscription(null);
     setSettings(null);
-    setDbUserId(null);
-    await clerkSignOut();
-  }, [clerkSignOut]);
+    localStorage.removeItem(STORAGE_KEY_USER);
+    localStorage.removeItem(STORAGE_KEY_TOKEN);
+  }, []);
 
   const updateSettings = useCallback(async (newSettings: Partial<UserSettings>) => {
-    if (!userId || !API_URL) return;
+    if (!token || !API_URL) return;
 
     try {
-      const token = await getToken();
       const response = await fetch(`${API_URL}/api/users/me`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          clerkUserId: userId,
-          ...newSettings,
-        }),
+        body: JSON.stringify(newSettings),
       });
 
       if (response.ok) {
@@ -147,16 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to update settings:", error);
     }
-  }, [userId, getToken]);
-
-  // Transform Clerk user to our format
-  const user = clerkUser ? {
-    id: dbUserId || clerkUser.id,
-    email: clerkUser.primaryEmailAddress?.emailAddress || "",
-    firstName: clerkUser.firstName || undefined,
-    lastName: clerkUser.lastName || undefined,
-    profilePicture: clerkUser.imageUrl || undefined,
-  } : null;
+  }, [token]);
 
   return (
     <AuthContext.Provider
@@ -164,12 +187,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         subscription,
         settings,
-        isLoading: !isClerkLoaded,
-        isAuthenticated: !!clerkUser,
+        isLoading,
+        isAuthenticated: !!user,
         signIn,
         signOut,
         refreshUser,
         updateSettings,
+        handleAuthCallback,
       }}
     >
       {children}
