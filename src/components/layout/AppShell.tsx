@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { SettingsModal } from "./SettingsModal";
 import { TranscriptionProvider } from "@/context/TranscriptionContext";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 import { motion, AnimatePresence } from "framer-motion";
+import { checkForUpdates } from "@/lib/updater";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -29,6 +30,11 @@ function AppShellContent({ children }: AppShellProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(getInitialOnboardingState);
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  useEffect(() => {
+    // Check for updates on startup
+    checkForUpdates(true);
+  }, []);
 
   const handleOnboardingComplete = useCallback(() => {
     localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");

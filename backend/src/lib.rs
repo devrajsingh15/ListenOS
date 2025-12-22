@@ -132,6 +132,7 @@ pub fn run() {
                 .build()
         )
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             // Voice

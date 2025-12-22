@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   isTauri,
@@ -152,10 +153,14 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
               className="text-center"
             >
               <div className="mb-6 flex justify-center">
-                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/20">
-                  <svg className="h-10 w-10 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
+                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+                  <Image
+                    src="/logo.svg"
+                    alt="ListenOS Logo"
+                    width={48}
+                    height={48}
+                    className="h-12 w-12"
+                  />
                 </div>
               </div>
               <h2 className="mb-2 text-2xl font-bold text-foreground">Welcome to ListenOS</h2>

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useAuth, SignedIn, SignedOut } from "@/context/AuthContext";
@@ -72,20 +73,14 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-border bg-sidebar-bg">
       {/* Logo */}
       <div className="flex items-center gap-2 px-5 py-5">
-        <div className="flex items-center gap-1.5">
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            className="text-primary"
-          >
-            <rect x="2" y="8" width="3" height="8" rx="1.5" fill="currentColor" />
-            <rect x="7" y="5" width="3" height="14" rx="1.5" fill="currentColor" />
-            <rect x="12" y="3" width="3" height="18" rx="1.5" fill="currentColor" />
-            <rect x="17" y="6" width="3" height="12" rx="1.5" fill="currentColor" />
-          </svg>
+        <div className="flex items-center gap-2">
+          <Image
+            src="/logo.svg"
+            alt="ListenOS Logo"
+            width={28}
+            height={28}
+            className="w-7 h-7"
+          />
           <span className="text-lg font-semibold text-foreground">ListenOS</span>
         </div>
         <span className="ml-1 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-white">
