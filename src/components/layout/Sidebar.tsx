@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useAuth, SignedIn, SignedOut } from "@/context/AuthContext";
 import {
   Home03Icon,
   Book02Icon,
@@ -17,6 +18,8 @@ import {
   CommandIcon,
   Copy01Icon,
   PlugIcon,
+  Login03Icon,
+  Logout03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -167,7 +170,52 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
           </li>
         </ul>
       </div>
+
+      {/* User Account */}
+      <div className="border-t border-border px-3 py-3">
+        <UserAccountSection />
+      </div>
     </aside>
+  );
+}
+
+function UserAccountSection() {
+  const { user, signIn, signOut } = useAuth();
+
+  return (
+    <>
+      <SignedIn>
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white text-sm font-medium">
+            {user?.firstName?.[0] || user?.email?.[0]?.toUpperCase() || "U"}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-foreground truncate">
+              {user?.firstName ? `${user.firstName} ${user.lastName || ""}`.trim() : user?.email}
+            </p>
+            {user?.firstName && (
+              <p className="text-xs text-muted truncate">{user.email}</p>
+            )}
+          </div>
+          <button
+            onClick={signOut}
+            className="p-1.5 rounded-lg text-muted hover:bg-sidebar-hover hover:text-foreground transition-colors"
+            title="Sign out"
+          >
+            <HugeiconsIcon icon={Logout03Icon} size={16} />
+          </button>
+        </div>
+      </SignedIn>
+      <SignedOut>
+        <button
+          onClick={signIn}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+        >
+          <HugeiconsIcon icon={Login03Icon} size={18} />
+          Sign In
+        </button>
+      </SignedOut>
+    </>
   );
 }
 
