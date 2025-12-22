@@ -1,32 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClerkClient } from "@clerk/backend";
+import { auth } from "@clerk/nextjs/server";
 import { db, users } from "@/lib/db";
 import { eq } from "drizzle-orm";
 
-const clerk = createClerkClient({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
+// Force dynamic rendering - this route should not be pre-rendered
+export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  
-  if (!authHeader?.startsWith("Bearer ")) {
-    return NextResponse.json({ error: "Missing authorization header" }, { status: 401 });
-  }
-
-  const sessionToken = authHeader.slice(7);
-
+export async function GET() {
   try {
-    // Verify the session token with Clerk
-    const session = await clerk.sessions.getSession(sessionToken);
-    
-    if (!session || session.status !== "active") {
-      return NextResponse.json({ error: "Invalid or expired session" }, { status: 401 });
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Get user from our database
+    // Fetch user data from database
     const user = await db.query.users.findFirst({
-      where: eq(users.clerkUserId, session.userId),
+      where: eq(users.clerkUserId, clerkUserId),
       with: {
         subscription: true,
         settings: true,
@@ -54,7 +44,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// Alternative endpoint for getting session by Clerk user ID
+// POST endpoint for getting session by Clerk user ID
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

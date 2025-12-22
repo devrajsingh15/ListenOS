@@ -1,31 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClerkClient } from "@clerk/backend";
+import { auth } from "@clerk/nextjs/server";
 import { db, users, subscriptions, userSettings } from "@/lib/db";
 import { eq } from "drizzle-orm";
 
-const clerk = createClerkClient({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
+// Force dynamic rendering - this route should not be pre-rendered
+export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
+    const { userId: clerkUserId } = await auth();
+    
+    if (!clerkUserId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await request.json();
-    const { userId } = body;
-
-    if (!userId) {
-      return NextResponse.json({ error: "Missing user ID" }, { status: 400 });
-    }
-
-    // Get user details from Clerk
-    const clerkUser = await clerk.users.getUser(userId);
-
-    if (!clerkUser) {
-      return NextResponse.json({ error: "User not found in Clerk" }, { status: 404 });
-    }
+    const { email, firstName, lastName, profilePicture } = body;
 
     // Check if user exists in our database
     let dbUser = await db.query.users.findFirst({
-      where: eq(users.clerkUserId, clerkUser.id),
+      where: eq(users.clerkUserId, clerkUserId),
     });
 
     if (!dbUser) {
@@ -33,11 +27,11 @@ export async function POST(request: NextRequest) {
       const [newUser] = await db
         .insert(users)
         .values({
-          clerkUserId: clerkUser.id,
-          email: clerkUser.emailAddresses[0]?.emailAddress || "",
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-          profilePicture: clerkUser.imageUrl,
+          clerkUserId,
+          email: email || "",
+          firstName,
+          lastName,
+          profilePicture,
         })
         .returning();
 
@@ -59,10 +53,10 @@ export async function POST(request: NextRequest) {
       await db
         .update(users)
         .set({
-          email: clerkUser.emailAddresses[0]?.emailAddress || dbUser.email,
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-          profilePicture: clerkUser.imageUrl,
+          email: email || dbUser.email,
+          firstName,
+          lastName,
+          profilePicture,
           updatedAt: new Date(),
         })
         .where(eq(users.id, dbUser.id));
@@ -95,8 +89,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Handle webhook events from Clerk (user created, updated, deleted)
-export async function GET(request: NextRequest) {
-  // For backwards compatibility - redirect to sign-in if accessed directly
-  return NextResponse.redirect(new URL("/", request.url));
+// Handle GET for redirect flow
+export async function GET() {
+  return NextResponse.redirect(new URL("/"));
 }

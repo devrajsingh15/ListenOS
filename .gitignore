@@ -16,6 +16,10 @@
 # next.js
 /.next/
 /out/
+server/.next/
+
+# server dependencies
+server/node_modules/
 
 # production
 /build
@@ -30,11 +34,15 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files - .env.local is committed intentionally for bundled keys
+# env files - keep all env files private
 .env
+.env.*
+.env.local
 .env.development
 .env.production
-!.env.local
+
+# server env
+server/.env
 
 # vercel
 .vercel

@@ -336,13 +336,13 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               <SettingsRow
                 label="Email"
                 description={user.email}
-                action={<span className="text-sm text-muted">Managed by WorkOS</span>}
+                action={<span className="text-sm text-muted">Managed by Clerk</span>}
               />
               {user.firstName && (
                 <SettingsRow
                   label="Name"
                   description={`${user.firstName}${user.lastName ? ` ${user.lastName}` : ""}`}
-                  action={<span className="text-sm text-muted">Managed by WorkOS</span>}
+                  action={<span className="text-sm text-muted">Managed by Clerk</span>}
                 />
               )}
               <SettingsRow
@@ -365,7 +365,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                 onClick={signIn}
                 className="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
               >
-                Sign in with WorkOS
+                Sign in
               </button>
             </div>
           )}

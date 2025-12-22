@@ -6,7 +6,7 @@ This guide will help you set up the complete backend infrastructure for ListenOS
 
 - Node.js 20+
 - Railway account (for Postgres database)
-- WorkOS account (for authentication)
+- Clerk account (for authentication)
 - GitHub repository with secrets configured
 
 ---
@@ -31,37 +31,55 @@ DATABASE_URL=postgresql://postgres:password@host:5432/railway
 Then run:
 
 ```bash
-npm run db:push
+cd server
+npx drizzle-kit push
 ```
 
 This will create all the tables (users, subscriptions, user_settings, command_history).
 
 ---
 
-## 2. WorkOS Authentication Setup
+## 2. Clerk Authentication Setup
 
-### Create WorkOS Application
+### Create Clerk Application
 
-1. Go to [WorkOS Dashboard](https://dashboard.workos.com)
-2. Create a new organization/project
-3. Go to "API Keys" and copy:
-   - **Client ID** (starts with `client_`)
-   - **API Key** (starts with `sk_`)
-
-### Configure Redirect URI
-
-In WorkOS Dashboard → Configuration → Redirect URIs, add:
-- `https://your-api-domain.vercel.app/api/auth/callback`
+1. Go to [Clerk Dashboard](https://dashboard.clerk.com)
+2. Create a new application
+3. Choose your sign-in options (Email, Google, GitHub, etc.)
+4. Go to "API Keys" and copy:
+   - **Publishable Key** (starts with `pk_`)
+   - **Secret Key** (starts with `sk_`)
 
 ### Add Environment Variables
 
-Add to your `.env.local`:
+Create `.env.local` in the project root:
 
 ```env
-WORKOS_API_KEY=sk_...
-WORKOS_CLIENT_ID=client_...
-NEXT_PUBLIC_WORKOS_CLIENT_ID=client_...
+# Clerk Authentication
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+
+# Clerk URLs
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/auth/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/auth/sign-up
+NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/
+NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/
+
+# Database
+DATABASE_URL=postgresql://...
+
+# API URL (your deployed Vercel app, optional for local dev)
 NEXT_PUBLIC_API_URL=https://your-api-domain.vercel.app
+```
+
+Create `server/.env`:
+
+```env
+# Clerk Authentication
+CLERK_SECRET_KEY=sk_test_...
+
+# Database
+DATABASE_URL=postgresql://...
 ```
 
 ---
@@ -71,12 +89,11 @@ NEXT_PUBLIC_API_URL=https://your-api-domain.vercel.app
 The API routes need to be deployed to a server. Since this is a Next.js app, deploy to Vercel:
 
 1. Connect your GitHub repo to Vercel
-2. Add environment variables in Vercel dashboard:
+2. Set the root directory to `server`
+3. Add environment variables in Vercel dashboard:
    - `DATABASE_URL`
-   - `WORKOS_API_KEY`
-   - `WORKOS_CLIENT_ID`
-   - `NEXT_PUBLIC_WORKOS_CLIENT_ID`
-3. Deploy
+   - `CLERK_SECRET_KEY`
+4. Deploy
 
 The API will be available at `https://your-project.vercel.app/api/...`
 
@@ -129,13 +146,16 @@ Go to GitHub Releases, edit the draft, and publish it.
 ### `.env.local` (local development)
 
 ```env
+# Clerk Authentication
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/auth/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/auth/sign-up
+NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/
+NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/
+
 # Database
 DATABASE_URL=postgresql://...
-
-# WorkOS
-WORKOS_API_KEY=sk_...
-WORKOS_CLIENT_ID=client_...
-NEXT_PUBLIC_WORKOS_CLIENT_ID=client_...
 
 # API URL (your deployed Vercel app)
 NEXT_PUBLIC_API_URL=https://your-app.vercel.app
@@ -145,9 +165,12 @@ GROQ_API_KEY=gsk_...
 DEEPGRAM_API_KEY=...
 ```
 
-### Vercel Environment Variables
+### Server Environment Variables (Vercel or server/.env)
 
-Same as above, but set in Vercel dashboard.
+```env
+CLERK_SECRET_KEY=sk_test_...
+DATABASE_URL=postgresql://...
+```
 
 ### GitHub Secrets
 
@@ -161,9 +184,12 @@ Same as above, but set in Vercel dashboard.
 ```bash
 # Install dependencies
 npm install
+cd server && npm install && cd ..
 
 # Push database schema
-npm run db:push
+cd server
+npx drizzle-kit push
+cd ..
 
 # Run development server
 npm run tauri:dev
@@ -187,9 +213,9 @@ npm run tauri:build
 
 ### Auth not working
 
-1. Ensure `NEXT_PUBLIC_API_URL` points to your deployed Vercel app
-2. Check that the redirect URI in WorkOS matches your API URL
-3. Verify the deep link `listenos://` is registered (check `tauri.conf.json`)
+1. Ensure Clerk environment variables are set correctly
+2. Check that `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` starts with `pk_`
+3. Verify the sign-in/sign-up URLs match your routes
 
 ### Updates not working
 
@@ -200,5 +226,5 @@ npm run tauri:build
 ### Database errors
 
 1. Check that `DATABASE_URL` is correct
-2. Run `npm run db:push` to create/update tables
-3. Use `npm run db:studio` to inspect the database
+2. Run `npx drizzle-kit push` in the server directory to create/update tables
+3. Use `npx drizzle-kit studio` to inspect the database
