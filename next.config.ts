@@ -17,11 +17,7 @@ const nextConfig: NextConfig = {
 
   // Explicitly set the workspace root to avoid scanning outside the project
   // and ignore the backend directory which contains generated binary/rust files
-  experimental: {
-    turbopack: {
-      root: ".",
-    },
-  },
+  experimental: {},
 };
 
 export default nextConfig;
