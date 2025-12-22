@@ -51,7 +51,7 @@ jobs:
           tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version
           releaseName: "ListenOS v__VERSION__"
           releaseBody: "See the assets below to download the latest version of ListenOS."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --bundle msi
           projectPath: ./backend
