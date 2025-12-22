@@ -212,6 +212,9 @@ pub fn run() {
 
             // Assistant: Start hidden, set transparent background, will show on hotkey
             if let Some(assistant) = app.get_webview_window("assistant") {
+                // Make the window click-through so clicks go to the app behind it
+                let _ = assistant.set_ignore_cursor_events(true);
+
                 // Set WebView background to transparent (RGBA with 0 alpha)
                 #[cfg(target_os = "windows")]
                 {
@@ -219,7 +222,7 @@ pub fn run() {
                     let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                 }
                 let _ = assistant.hide();
-                log::info!("Assistant window initialized (hidden, transparent background)");
+                log::info!("Assistant window initialized (hidden, transparent, click-through)");
             }
 
             log::info!("ListenOS setup complete - dual-window architecture ready");

@@ -109,6 +109,7 @@ body.assistant-mode,
   box-shadow: none !important;
   overflow: hidden !important;
   user-select: none;
+  pointer-events: none !important;
   color: white;
   margin: 0 !important;
   padding: 0 !important;
@@ -138,28 +139,11 @@ body.assistant-mode,
 .assistant-mode [data-nextjs-toast],
 .assistant-mode [data-nextjs-toast-wrapper],
 .assistant-mode #__next-build-watcher,
-.assistant-mode #__next-prerender-indicator,
-.assistant-mode [data-turbopack],
-.assistant-mode [data-next-hide-fouc],
-.assistant-mode [data-nextjs-scroll-focus-boundary],
-.assistant-mode #__next-route-announcer__,
-.assistant-mode [class*="nextjs"],
-.assistant-mode [class*="turbopack"],
-.assistant-mode [id*="__next"],
-.assistant-mode [id*="nextjs"],
-.assistant-mode [aria-live="assertive"],
-.assistant-mode [aria-live="polite"],
-.assistant-mode [role="status"],
-.assistant-mode [role="alert"] {
+.assistant-mode #__next-prerender-indicator {
   display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
-  width: 0 !important;
-  height: 0 !important;
-  overflow: hidden !important;
-  position: absolute !important;
-  clip: rect(0, 0, 0, 0) !important;
 }
 
 /* Custom utility classes */
