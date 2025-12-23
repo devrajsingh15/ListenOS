@@ -239,6 +239,102 @@ export async function importCustomCommands(json: string): Promise<number> {
   return invoke("import_custom_commands", { json });
 }
 
+// ============ Autostart Commands ============
+
+export async function getAutostartEnabled(): Promise<boolean> {
+  return invoke("get_autostart_enabled");
+}
+
+export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
+  return invoke("set_autostart_enabled", { enabled });
+}
+
+// ============ Notes Types & Commands ============
+
+export interface Note {
+  id: string;
+  content: string;
+  timestamp: string;
+  tags: string[];
+  is_pinned: boolean;
+}
+
+export async function getNotes(limit?: number): Promise<Note[]> {
+  return invoke("get_notes", { limit });
+}
+
+export async function createNote(content: string): Promise<Note> {
+  return invoke("create_note", { content });
+}
+
+export async function updateNote(id: string, content: string): Promise<void> {
+  return invoke("update_note", { id, content });
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  return invoke("delete_note", { id });
+}
+
+export async function toggleNotePin(id: string): Promise<boolean> {
+  return invoke("toggle_note_pin", { id });
+}
+
+// ============ Snippets Types & Commands ============
+
+export interface Snippet {
+  id: string;
+  trigger: string;
+  expansion: string;
+  category: string;
+  created_at: string;
+  last_used: string | null;
+  use_count: number;
+}
+
+export async function getSnippets(): Promise<Snippet[]> {
+  return invoke("get_snippets");
+}
+
+export async function createSnippet(trigger: string, expansion: string): Promise<Snippet> {
+  return invoke("create_snippet", { trigger, expansion });
+}
+
+export async function updateSnippet(id: string, trigger: string, expansion: string): Promise<void> {
+  return invoke("update_snippet", { id, trigger, expansion });
+}
+
+export async function deleteSnippet(id: string): Promise<void> {
+  return invoke("delete_snippet", { id });
+}
+
+// ============ Dictionary Types & Commands ============
+
+export interface DictionaryWord {
+  id: string;
+  word: string;
+  phonetic: string | null;
+  category: string;
+  is_auto_learned: boolean;
+  created_at: string;
+  use_count: number;
+}
+
+export async function getDictionaryWords(): Promise<DictionaryWord[]> {
+  return invoke("get_dictionary_words");
+}
+
+export async function addDictionaryWord(word: string, isAutoLearned?: boolean): Promise<DictionaryWord> {
+  return invoke("add_dictionary_word", { word, isAutoLearned });
+}
+
+export async function updateDictionaryWord(id: string, word: string, phonetic?: string): Promise<void> {
+  return invoke("update_dictionary_word", { id, word, phonetic });
+}
+
+export async function deleteDictionaryWord(id: string): Promise<void> {
+  return invoke("delete_dictionary_word", { id });
+}
+
 // ============ Utility ============
 
 export function isTauri(): boolean {

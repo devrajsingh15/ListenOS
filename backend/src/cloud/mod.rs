@@ -315,18 +315,29 @@ impl GroqClient {
 
     /// Build the system prompt with context
     fn build_system_prompt(&self, voice_context: &VoiceContext, conv_context: &ConversationContext) -> String {
-        let mut prompt = String::from(r#"You are ListenOS, an intelligent AI desktop assistant with MEMORY and CONTEXT awareness.
+        let mut prompt = String::from(r#"You are ListenOS, a voice-to-action assistant. Your PRIMARY job is to help users type text and execute commands.
 
-You can have CONVERSATIONS, remember what was said before, and understand context like "that", "it", "the same one".
+=== CRITICAL DECISION TREE (FOLLOW IN ORDER) ===
+
+STEP 1: Does the input contain an EXPLICIT COMMAND KEYWORD?
+Command keywords: "open", "launch", "start", "search", "google", "play", "pause", "stop", "next", "previous", "skip", "mute", "unmute", "volume", "lock", "screenshot", "clipboard", "translate", "summarize", "format"
+
+If NO command keyword found → USE type_text (this is the DEFAULT)
+If YES command keyword found → Continue to Step 2
+
+STEP 2: Is the command keyword at the START of the sentence?
+- "Open Chrome" → YES, it's a command
+- "I want to open a new document" → NO, user is dictating about opening something
+- "Search for restaurants" → YES, it's a command  
+- "I need to search for a solution" → NO, user is dictating
+
+If command keyword is NOT at the start → USE type_text
+If command keyword IS at the start → Execute the appropriate command
+
+=== THE GOLDEN RULE ===
+WHEN IN DOUBT, USE type_text. It's better to type text that the user can delete than to execute a wrong command.
 
 "#);
-
-        // Add conversation history if available
-        if !conv_context.history.is_empty() {
-            prompt.push_str("=== CONVERSATION HISTORY ===\n");
-            prompt.push_str(&conv_context.history);
-            prompt.push_str("\n\n");
-        }
 
         // Add context information
         prompt.push_str("=== CURRENT CONTEXT ===\n");
@@ -341,112 +352,86 @@ You can have CONVERSATIONS, remember what was said before, and understand contex
         
         if let Some(ref last_action) = conv_context.last_action {
             prompt.push_str(&format!("Last action: {}\n", last_action));
-            if let Some(ref payload) = conv_context.last_payload {
-                prompt.push_str(&format!("Last payload: {:?}\n", payload));
-            }
         }
 
-        if !conv_context.user_facts.is_empty() {
-            prompt.push_str("Known user preferences:\n");
-            for fact in &conv_context.user_facts {
-                prompt.push_str(&format!("  - {}\n", fact));
-            }
-        }
+        prompt.push_str(&format!("OS: {}\n\n", voice_context.os));
 
-        prompt.push_str(&format!("OS: {}\n", voice_context.os));
-        prompt.push_str(&format!("Time: {}\n\n", voice_context.timestamp));
+        // Add available actions with clear triggers
+        prompt.push_str(r#"=== AVAILABLE COMMANDS (only when explicitly triggered) ===
 
-        // Add available actions
-        prompt.push_str(r#"=== AVAILABLE ACTIONS ===
+APPS & BROWSER:
+- open_app: Trigger words: "open", "launch", "start" + app name
+  Example: "Open Chrome" → {"action": "open_app", "payload": {"app": "chrome"}}
+  
+- open_url: Trigger words: "open", "go to" + URL/website
+  Example: "Open google.com" → {"action": "open_url", "payload": {"url": "https://google.com"}}
+  
+- web_search: Trigger words: "search", "google", "look up", "find"
+  Example: "Search for weather" → {"action": "web_search", "payload": {"query": "weather"}}
 
-COMPUTER CONTROL:
-- open_url: Open a URL in browser (payload: {url})
-- open_app: Open an application (payload: {app})
-- web_search: Search Google (payload: {query})
-- type_text: Type text (refined_text contains the text)
-- volume_control: Volume up/down/mute (payload: {direction})
-- run_command: Run system command (payload: {command})
-- send_email: Open Gmail compose (payload: {to, subject, body})
-- multi_step: Multiple actions in sequence (payload: {steps: [...]})
+MEDIA CONTROL:
+- spotify_control: Trigger words: "play", "pause", "stop", "next", "previous", "skip"
+  Example: "Pause the music" → {"action": "spotify_control", "payload": {"action": "pause"}}
+  Example: "Play some jazz" → {"action": "spotify_control", "payload": {"action": "search", "query": "jazz"}}
 
-CLIPBOARD OPERATIONS (when user mentions clipboard):
-- clipboard_format: Format clipboard content (payload: {format: "bullet"|"numbered"|"paragraph"})
-- clipboard_translate: Translate clipboard (payload: {target_language})
-- clipboard_summarize: Summarize clipboard content
-- clipboard_clean: Clean up clipboard text
+- volume_control: Trigger words: "volume", "louder", "quieter", "mute"
+  Example: "Volume up" → {"action": "volume_control", "payload": {"direction": "up"}}
 
-APP INTEGRATIONS:
-- spotify_control: Control Spotify (payload: {action: "play"|"pause"|"next"|"previous"|"search", query?})
-- discord_control: Control Discord (payload: {action: "mute"|"deafen"|"disconnect"})
-- system_control: System controls (payload: {action: "lock"|"sleep"|"brightness"|"screenshot", level?})
+SYSTEM:
+- system_control: Trigger words: "lock", "screenshot", "sleep"
+  Example: "Lock my computer" → {"action": "system_control", "payload": {"action": "lock"}}
+  Example: "Take a screenshot" → {"action": "system_control", "payload": {"action": "screenshot"}}
 
-CONVERSATIONAL:
-- respond: Answer a question or have a conversation (response_text contains your answer)
-- clarify: Ask for more information (response_text contains your question)
+CLIPBOARD (only when "clipboard" is mentioned):
+- clipboard_format: "format my clipboard", "clipboard as bullets"
+- clipboard_translate: "translate my clipboard to Spanish"
+- clipboard_summarize: "summarize my clipboard"
 
-=== CONTEXT UNDERSTANDING ===
-
-You MUST understand references to previous context:
-- "that" / "it" / "the same" → refers to last action's target
-- "him" / "her" / "them" → refers to last mentioned person
-- "do it again" / "repeat" → repeat last action
-- "undo" / "cancel" → undo last action if possible
-- "send it to X instead" → modify last email/message recipient
-- "add that to my calendar" → use context from last action
+DICTATION (DEFAULT - use for everything else):
+- type_text: Used when the user is dictating text to be typed
+  The refined_text field contains the EXACT text to type
+  Example: "Hello how are you" → {"action": "type_text", "refined_text": "Hello, how are you?"}
+  Example: "I need to finish the report by Friday" → {"action": "type_text", "refined_text": "I need to finish the report by Friday."}
 
 === RESPONSE FORMAT (JSON only) ===
 
 {
   "action": "action_type",
-  "payload": {...},
-  "refined_text": "for type_text only",
-  "response_text": "for respond/clarify only",
-  "requires_confirmation": false
+  "payload": {},
+  "refined_text": "only for type_text - the exact text to type with proper punctuation"
 }
 
-=== CRITICAL RULES ===
+=== EXAMPLES - COMMANDS ===
 
-1. UNDERSTAND CONTEXT: Use conversation history to understand references
-2. NATURAL CONVERSATION: For questions directed at you (not dictation), use "respond" action
-3. DICTATION MODE: If user is clearly dictating (continuous speech meant to be typed), use "type_text"
-4. FOLLOW-UPS: Handle follow-up requests using context from previous actions
-5. CLARIFY when needed: If ambiguous, ask a clarifying question
-6. For type_text: refined_text is the user's EXACT words with proper formatting
-7. For respond: response_text is YOUR conversational response
+"Open Chrome" → {"action": "open_app", "payload": {"app": "chrome"}}
+"Search for Italian restaurants" → {"action": "web_search", "payload": {"query": "Italian restaurants"}}
+"Pause" → {"action": "spotify_control", "payload": {"action": "pause"}}
+"Lock computer" → {"action": "system_control", "payload": {"action": "lock"}}
+"Volume down" → {"action": "volume_control", "payload": {"direction": "down"}}
 
-=== EXAMPLES ===
+=== EXAMPLES - DICTATION (type_text) ===
 
-User: "What's the weather like?"
-→ {"action": "respond", "response_text": "I'd be happy to check that for you! Let me search for the current weather.", "payload": {}}
-(Then a follow-up action could search for weather)
+"Hello world" → {"action": "type_text", "refined_text": "Hello world."}
+"The meeting is scheduled for 3 PM" → {"action": "type_text", "refined_text": "The meeting is scheduled for 3 PM."}
+"Dear John comma I hope this email finds you well" → {"action": "type_text", "refined_text": "Dear John, I hope this email finds you well."}
+"Please review the attached document and let me know your thoughts" → {"action": "type_text", "refined_text": "Please review the attached document and let me know your thoughts."}
+"I think we should open the discussion with" → {"action": "type_text", "refined_text": "I think we should open the discussion with"}
+"Can you help me with this" → {"action": "type_text", "refined_text": "Can you help me with this?"}
 
-User: "Open Chrome" then later "Open that again"
-→ {"action": "open_app", "payload": {"app": "chrome"}}
+=== PUNCTUATION RULES FOR type_text ===
 
-User: "Send email to john@test.com" then "Actually send it to sarah instead"  
-→ {"action": "send_email", "payload": {"to": "sarah@test.com", ...}}
-
-User: "Summarize my clipboard"
-→ {"action": "clipboard_summarize", "payload": {}}
-
-User: "Pause the music"
-→ {"action": "spotify_control", "payload": {"action": "pause"}}
-
-User: "Lock my computer"
-→ {"action": "system_control", "payload": {"action": "lock"}}
-
-User: "Hello, how are you?" (in a text input context)
-→ {"action": "type_text", "refined_text": "Hello, how are you?"}
-
-User: "Hey ListenOS, how are you doing?"
-→ {"action": "respond", "response_text": "I'm doing great, thank you for asking! How can I help you today?"}
+1. Add periods at the end of complete sentences
+2. Add question marks for questions
+3. Convert spoken punctuation: "comma" → ",", "period" → ".", "question mark" → "?"
+4. Capitalize first letter of sentences
+5. Keep the user's words exactly, just add proper formatting
 "#);
 
         prompt
     }
 
     /// Parse the LLM response into an ActionResult
-    fn parse_llm_response(&self, parsed: &serde_json::Value, _original_text: &str) -> Result<ActionResult, String> {
+    fn parse_llm_response(&self, parsed: &serde_json::Value, original_text: &str) -> Result<ActionResult, String> {
         let action_str = parsed["action"].as_str().unwrap_or("type_text");
         
         let action_type = match action_str {
@@ -457,8 +442,21 @@ User: "Hey ListenOS, how are you doing?"
             "volume_control" => ActionType::VolumeControl,
             "send_email" => ActionType::SendEmail,
             "multi_step" => ActionType::MultiStep,
-            "respond" => ActionType::Respond,
-            "clarify" => ActionType::Clarify,
+            // Convert respond/clarify to type_text to avoid confusion
+            // (nothing visible happens with respond, which frustrates users)
+            "respond" | "clarify" => {
+                // If there's a response_text, type it instead of doing nothing
+                if let Some(response) = parsed["response_text"].as_str() {
+                    return Ok(ActionResult {
+                        action_type: ActionType::TypeText,
+                        payload: serde_json::json!({}),
+                        refined_text: Some(response.to_string()),
+                        response_text: None,
+                        requires_confirmation: false,
+                    });
+                }
+                ActionType::TypeText
+            },
             "clipboard_format" => ActionType::ClipboardFormat,
             "clipboard_translate" => ActionType::ClipboardTranslate,
             "clipboard_summarize" => ActionType::ClipboardSummarize,
@@ -471,16 +469,23 @@ User: "Hey ListenOS, how are you doing?"
             _ => ActionType::TypeText,
         };
 
-        let requires_confirmation = parsed["requires_confirmation"]
-            .as_bool()
-            .unwrap_or(false);
+        // For type_text, ensure we have text to type
+        let refined_text = if action_type == ActionType::TypeText {
+            parsed["refined_text"]
+                .as_str()
+                .map(|s| s.to_string())
+                // Fallback: use original transcription if no refined_text
+                .or_else(|| Some(original_text.to_string()))
+        } else {
+            parsed["refined_text"].as_str().map(|s| s.to_string())
+        };
 
         Ok(ActionResult {
             action_type,
             payload: parsed["payload"].clone(),
-            refined_text: parsed["refined_text"].as_str().map(|s| s.to_string()),
+            refined_text,
             response_text: parsed["response_text"].as_str().map(|s| s.to_string()),
-            requires_confirmation,
+            requires_confirmation: false,
         })
     }
 

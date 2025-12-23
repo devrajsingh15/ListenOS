@@ -746,8 +746,15 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
     use enigo::{Enigo, Keyboard, Key, Settings, Direction};
     use arboard::Clipboard;
     
+    if text.is_empty() {
+        return Err("No text to type".to_string());
+    }
+    
+    log::info!("type_text_internal: Starting to type {} chars", text.len());
+    
     // Longer delay to ensure focus is restored after Ctrl+Space release
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    // Windows needs more time to restore focus to the previous window
+    tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
     
     // Use clipboard + Ctrl+V for reliable pasting (more reliable than enigo.text())
     let mut clipboard = Clipboard::new()
@@ -755,38 +762,111 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
     
     // Save current clipboard content to restore later
     let previous_content = clipboard.get_text().ok();
+    log::info!("type_text_internal: Saved previous clipboard content");
     
-    // Set our text to clipboard
-    clipboard.set_text(&text)
-        .map_err(|e| format!("Failed to set clipboard: {}", e))?;
+    // Set our text to clipboard with retry
+    let mut set_success = false;
+    for attempt in 1..=3 {
+        match clipboard.set_text(&text) {
+            Ok(_) => {
+                // Verify the clipboard was actually set
+                tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+                if let Ok(current) = clipboard.get_text() {
+                    if current == text {
+                        set_success = true;
+                        log::info!("type_text_internal: Clipboard set successfully on attempt {}", attempt);
+                        break;
+                    }
+                }
+                log::warn!("type_text_internal: Clipboard verification failed on attempt {}", attempt);
+            }
+            Err(e) => {
+                log::warn!("type_text_internal: Failed to set clipboard on attempt {}: {}", attempt, e);
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
     
-    // Small delay for clipboard to be ready
+    if !set_success {
+        return Err("Failed to set clipboard after 3 attempts".to_string());
+    }
+    
+    // Additional delay for clipboard to be fully ready
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     
-    // Simulate Ctrl+V to paste
+    // Simulate Ctrl+V to paste with retry
+    let mut paste_success = false;
+    for attempt in 1..=2 {
+        match paste_with_enigo() {
+            Ok(_) => {
+                paste_success = true;
+                log::info!("type_text_internal: Paste successful on attempt {}", attempt);
+                break;
+            }
+            Err(e) => {
+                log::warn!("type_text_internal: Paste failed on attempt {}: {}", attempt, e);
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+    
+    if !paste_success {
+        // Fallback: try character-by-character typing for short text
+        if text.len() <= 100 {
+            log::info!("type_text_internal: Falling back to character-by-character typing");
+            if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
+                if enigo.text(&text).is_ok() {
+                    paste_success = true;
+                }
+            }
+        }
+    }
+    
+    // Restore previous clipboard content after a delay
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    if let Some(prev) = previous_content {
+        let _ = clipboard.set_text(&prev);
+        log::info!("type_text_internal: Restored previous clipboard content");
+    }
+    
+    if paste_success {
+        log::info!("type_text_internal: Successfully typed text");
+        Ok(CommandResult {
+            success: true,
+            message: format!("Typed: {}", if text.len() > 50 { format!("{}...", &text[..50]) } else { text }),
+            output: None,
+        })
+    } else {
+        Err("Failed to paste text into the focused application".to_string())
+    }
+}
+
+/// Helper function to perform Ctrl+V paste
+fn paste_with_enigo() -> Result<(), String> {
+    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
+    
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("Failed to create enigo: {}", e))?;
     
+    // Press Ctrl
     enigo.key(Key::Control, Direction::Press)
         .map_err(|e| format!("Failed to press Ctrl: {}", e))?;
+    
+    // Small delay between key presses
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    
+    // Press and release V
     enigo.key(Key::Unicode('v'), Direction::Click)
         .map_err(|e| format!("Failed to press V: {}", e))?;
+    
+    // Small delay before releasing
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    
+    // Release Ctrl
     enigo.key(Key::Control, Direction::Release)
         .map_err(|e| format!("Failed to release Ctrl: {}", e))?;
     
-    // Restore previous clipboard content after a delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    if let Some(prev) = previous_content {
-        let _ = clipboard.set_text(&prev);
-    }
-    
-    log::info!("Pasted: {}", text);
-    
-    Ok(CommandResult {
-        success: true,
-        message: format!("Typed: {}", text),
-        output: None,
-    })
+    Ok(())
 }
 
 /// Run a system command

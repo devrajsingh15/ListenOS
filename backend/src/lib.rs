@@ -14,6 +14,9 @@ mod streaming;
 mod conversation;
 mod clipboard;
 mod integrations;
+mod notes;
+mod snippets;
+mod dictionary;
 
 use tauri::{
     Emitter, Manager, AppHandle,
@@ -32,6 +35,9 @@ pub use streaming::{AudioStreamer, AudioAccumulator, SAMPLE_RATE};
 pub use conversation::{ConversationMemory, ConversationStore, Message, Role, Fact};
 pub use clipboard::ClipboardService;
 pub use integrations::{IntegrationManager, AppIntegration};
+pub use notes::{Note, NotesStore};
+pub use snippets::{Snippet, SnippetsStore};
+pub use dictionary::{DictionaryWord, DictionaryStore};
 
 /// Global application state
 pub struct AppState {
@@ -135,6 +141,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             // Voice
@@ -175,6 +185,25 @@ pub fn run() {
             // Window control
             hide_assistant,
             show_dashboard,
+            // Autostart
+            get_autostart_enabled,
+            set_autostart_enabled,
+            // Notes
+            get_notes,
+            create_note,
+            update_note,
+            delete_note,
+            toggle_note_pin,
+            // Snippets
+            get_snippets,
+            create_snippet,
+            update_snippet,
+            delete_snippet,
+            // Dictionary
+            get_dictionary_words,
+            add_dictionary_word,
+            update_dictionary_word,
+            delete_dictionary_word,
         ])
         .setup(|app| {
             // Register global shortcut on startup
@@ -260,6 +289,112 @@ async fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> 
     let mut history = state.history.lock().await;
     history.clear();
     Ok(())
+}
+
+#[tauri::command]
+async fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    manager.is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    
+    // Return the new state
+    manager.is_enabled().map_err(|e| e.to_string())
+}
+
+// ============ Notes Commands ============
+
+#[tauri::command]
+async fn get_notes(limit: Option<usize>) -> Result<Vec<notes::Note>, String> {
+    let store = notes::NotesStore::new()?;
+    store.get_all_notes(limit)
+}
+
+#[tauri::command]
+async fn create_note(content: String) -> Result<notes::Note, String> {
+    let store = notes::NotesStore::new()?;
+    store.create_note(content)
+}
+
+#[tauri::command]
+async fn update_note(id: String, content: String) -> Result<(), String> {
+    let store = notes::NotesStore::new()?;
+    store.update_note(&id, content)
+}
+
+#[tauri::command]
+async fn delete_note(id: String) -> Result<(), String> {
+    let store = notes::NotesStore::new()?;
+    store.delete_note(&id)
+}
+
+#[tauri::command]
+async fn toggle_note_pin(id: String) -> Result<bool, String> {
+    let store = notes::NotesStore::new()?;
+    store.toggle_pin(&id)
+}
+
+// ============ Snippets Commands ============
+
+#[tauri::command]
+async fn get_snippets() -> Result<Vec<snippets::Snippet>, String> {
+    let store = snippets::SnippetsStore::new()?;
+    store.get_all_snippets()
+}
+
+#[tauri::command]
+async fn create_snippet(trigger: String, expansion: String) -> Result<snippets::Snippet, String> {
+    let store = snippets::SnippetsStore::new()?;
+    store.create_snippet(trigger, expansion)
+}
+
+#[tauri::command]
+async fn update_snippet(id: String, trigger: String, expansion: String) -> Result<(), String> {
+    let store = snippets::SnippetsStore::new()?;
+    store.update_snippet(&id, trigger, expansion)
+}
+
+#[tauri::command]
+async fn delete_snippet(id: String) -> Result<(), String> {
+    let store = snippets::SnippetsStore::new()?;
+    store.delete_snippet(&id)
+}
+
+// ============ Dictionary Commands ============
+
+#[tauri::command]
+async fn get_dictionary_words() -> Result<Vec<dictionary::DictionaryWord>, String> {
+    let store = dictionary::DictionaryStore::new()?;
+    store.get_all_words()
+}
+
+#[tauri::command]
+async fn add_dictionary_word(word: String, is_auto_learned: Option<bool>) -> Result<dictionary::DictionaryWord, String> {
+    let store = dictionary::DictionaryStore::new()?;
+    store.add_word(word, is_auto_learned.unwrap_or(false))
+}
+
+#[tauri::command]
+async fn update_dictionary_word(id: String, word: String, phonetic: Option<String>) -> Result<(), String> {
+    let store = dictionary::DictionaryStore::new()?;
+    store.update_word(&id, word, phonetic)
+}
+
+#[tauri::command]
+async fn delete_dictionary_word(id: String) -> Result<(), String> {
+    let store = dictionary::DictionaryStore::new()?;
+    store.delete_word(&id)
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), tauri::Error> {

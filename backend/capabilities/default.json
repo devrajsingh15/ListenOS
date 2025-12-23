@@ -26,6 +26,9 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-unregister-all",
     "shell:allow-open",
-    "shell:allow-execute"
+    "shell:allow-execute",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

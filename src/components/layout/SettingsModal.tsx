@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { isTauri } from "@/lib/tauri";
+import { isTauri, getAutostartEnabled, setAutostartEnabled } from "@/lib/tauri";
 import { checkForUpdates } from "@/lib/updater";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -168,14 +168,23 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const { user, subscription, settings, signIn, signOut, updateSettings, isAuthenticated } = useAuth();
 
   // Local state for system settings
-  const [startOnLogin, setStartOnLogin] = useState(settings?.startOnLogin ?? true);
+  const [startOnLogin, setStartOnLogin] = useState(settings?.startOnLogin ?? false);
   const [showInTray, setShowInTray] = useState(settings?.showInTray ?? true);
   const [language, setLanguage] = useState(settings?.language ?? "en");
+  const [autostartLoading, setAutostartLoading] = useState(false);
+
+  // Load actual autostart state on mount
+  useEffect(() => {
+    if (isTauri()) {
+      getAutostartEnabled()
+        .then((enabled) => setStartOnLogin(enabled))
+        .catch((err) => console.error("Failed to get autostart status:", err));
+    }
+  }, []);
 
   // Update local state when settings change
   useEffect(() => {
     if (settings) {
-      setStartOnLogin(settings.startOnLogin);
       setShowInTray(settings.showInTray);
       setLanguage(settings.language);
     }
@@ -202,8 +211,24 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   }, []);
 
   const handleStartOnLoginChange = useCallback(async (checked: boolean) => {
-    setStartOnLogin(checked);
-    await updateSettings({ startOnLogin: checked });
+    if (!isTauri()) {
+      setStartOnLogin(checked);
+      await updateSettings({ startOnLogin: checked });
+      return;
+    }
+    
+    setAutostartLoading(true);
+    try {
+      const newState = await setAutostartEnabled(checked);
+      setStartOnLogin(newState);
+      await updateSettings({ startOnLogin: newState });
+    } catch (err) {
+      console.error("Failed to set autostart:", err);
+      // Revert UI state on error
+      setStartOnLogin(!checked);
+    } finally {
+      setAutostartLoading(false);
+    }
   }, [updateSettings]);
 
   const handleShowInTrayChange = useCallback(async (checked: boolean) => {
@@ -291,6 +316,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                 <ToggleSwitch 
                   checked={startOnLogin} 
                   onChange={handleStartOnLoginChange}
+                  disabled={autostartLoading}
                 />
               }
             />
@@ -516,17 +542,21 @@ function SettingsRow({
 
 function ToggleSwitch({ 
   checked, 
-  onChange 
+  onChange,
+  disabled = false,
 }: { 
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <button
-      onClick={() => onChange(!checked)}
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
       className={cn(
         "relative h-6 w-11 rounded-full transition-colors",
-        checked ? "bg-primary" : "bg-border"
+        checked ? "bg-primary" : "bg-border",
+        disabled && "opacity-50 cursor-not-allowed"
       )}
     >
       <span
