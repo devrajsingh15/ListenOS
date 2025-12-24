@@ -154,24 +154,122 @@ impl SystemControlsIntegration {
         Ok(())
     }
 
-    /// Toggle WiFi
-    fn toggle_wifi() -> Result<(), String> {
-        let script = r#"
-            $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
-            if ($adapter) {
-                if ($adapter.Status -eq 'Up') {
+    /// Toggle WiFi on/off
+    fn toggle_wifi(enable: Option<bool>) -> Result<String, String> {
+        let script = match enable {
+            Some(true) => r#"
+                $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
+                if ($adapter) {
+                    Enable-NetAdapter -Name $adapter.Name -Confirm:$false
+                    Write-Output "WiFi enabled"
+                } else {
+                    Write-Error "No WiFi adapter found"
+                }
+            "#,
+            Some(false) => r#"
+                $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
+                if ($adapter) {
                     Disable-NetAdapter -Name $adapter.Name -Confirm:$false
                     Write-Output "WiFi disabled"
                 } else {
-                    Enable-NetAdapter -Name $adapter.Name -Confirm:$false
-                    Write-Output "WiFi enabled"
+                    Write-Error "No WiFi adapter found"
                 }
-            } else {
-                Write-Error "No WiFi adapter found"
-            }
-        "#;
-        Self::run_powershell(script)?;
-        Ok(())
+            "#,
+            None => r#"
+                $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
+                if ($adapter) {
+                    if ($adapter.Status -eq 'Up') {
+                        Disable-NetAdapter -Name $adapter.Name -Confirm:$false
+                        Write-Output "WiFi disabled"
+                    } else {
+                        Enable-NetAdapter -Name $adapter.Name -Confirm:$false
+                        Write-Output "WiFi enabled"
+                    }
+                } else {
+                    Write-Error "No WiFi adapter found"
+                }
+            "#,
+        };
+        let output = Self::run_powershell(script)?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Toggle Bluetooth on/off
+    fn toggle_bluetooth(enable: Option<bool>) -> Result<String, String> {
+        // Use PowerShell to toggle Bluetooth radio
+        // This uses the Windows.Devices.Radios API
+        let script = match enable {
+            Some(true) => r#"
+                Add-Type -AssemblyName System.Runtime.WindowsRuntime
+                $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+                Function Await($WinRtTask, $ResultType) {
+                    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+                    $netTask = $asTask.Invoke($null, @($WinRtTask))
+                    $netTask.Wait(-1) | Out-Null
+                    $netTask.Result
+                }
+                [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+                [Windows.Devices.Radios.RadioState,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+                $radios = Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus])
+                $radios = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])
+                $bluetooth = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
+                if ($bluetooth) {
+                    Await ($bluetooth.SetStateAsync('On')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null
+                    Write-Output "Bluetooth enabled"
+                } else {
+                    Write-Error "No Bluetooth radio found"
+                }
+            "#,
+            Some(false) => r#"
+                Add-Type -AssemblyName System.Runtime.WindowsRuntime
+                $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+                Function Await($WinRtTask, $ResultType) {
+                    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+                    $netTask = $asTask.Invoke($null, @($WinRtTask))
+                    $netTask.Wait(-1) | Out-Null
+                    $netTask.Result
+                }
+                [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+                [Windows.Devices.Radios.RadioState,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+                $radios = Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus])
+                $radios = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])  
+                $bluetooth = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
+                if ($bluetooth) {
+                    Await ($bluetooth.SetStateAsync('Off')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null
+                    Write-Output "Bluetooth disabled"
+                } else {
+                    Write-Error "No Bluetooth radio found"
+                }
+            "#,
+            None => r#"
+                Add-Type -AssemblyName System.Runtime.WindowsRuntime
+                $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+                Function Await($WinRtTask, $ResultType) {
+                    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+                    $netTask = $asTask.Invoke($null, @($WinRtTask))
+                    $netTask.Wait(-1) | Out-Null
+                    $netTask.Result
+                }
+                [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+                [Windows.Devices.Radios.RadioState,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+                $radios = Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus])
+                $radios = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])  
+                $bluetooth = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
+                if ($bluetooth) {
+                    if ($bluetooth.State -eq 'On') {
+                        Await ($bluetooth.SetStateAsync('Off')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null
+                        Write-Output "Bluetooth disabled"
+                    } else {
+                        Await ($bluetooth.SetStateAsync('On')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null
+                        Write-Output "Bluetooth enabled"
+                    }
+                } else {
+                    Write-Error "No Bluetooth radio found"
+                }
+            "#,
+        };
+        let output = Self::run_powershell(script)?;
+        Ok(output.trim().to_string())
     }
 
     /// Empty recycle bin
@@ -321,6 +419,25 @@ impl AppIntegration for SystemControlsIntegration {
                 ],
             },
             IntegrationAction {
+                id: "system_bluetooth_toggle".to_string(),
+                name: "Toggle Bluetooth".to_string(),
+                description: "Enable or disable Bluetooth".to_string(),
+                parameters: vec![
+                    ActionParameter {
+                        name: "enable".to_string(),
+                        param_type: "boolean".to_string(),
+                        required: false,
+                        description: "true to enable, false to disable, omit to toggle".to_string(),
+                    },
+                ],
+                example_phrases: vec![
+                    "turn on bluetooth".to_string(),
+                    "turn off bluetooth".to_string(),
+                    "enable bluetooth".to_string(),
+                    "disable bluetooth".to_string(),
+                ],
+            },
+            IntegrationAction {
                 id: "system_wifi".to_string(),
                 name: "WiFi Settings".to_string(),
                 description: "Open WiFi settings".to_string(),
@@ -440,14 +557,21 @@ impl AppIntegration for SystemControlsIntegration {
                 Ok(IntegrationResult::success("Opened Bluetooth settings"))
             }
             
+            "system_bluetooth_toggle" => {
+                let enable = params.get("enable").and_then(|v| v.as_bool());
+                let result = Self::toggle_bluetooth(enable)?;
+                Ok(IntegrationResult::success(result))
+            }
+            
             "system_wifi" => {
                 Self::open_wifi_settings()?;
                 Ok(IntegrationResult::success("Opened WiFi settings"))
             }
             
             "system_wifi_toggle" => {
-                Self::toggle_wifi()?;
-                Ok(IntegrationResult::success("Toggled WiFi"))
+                let enable = params.get("enable").and_then(|v| v.as_bool());
+                let result = Self::toggle_wifi(enable)?;
+                Ok(IntegrationResult::success(result))
             }
             
             "system_screenshot" => {

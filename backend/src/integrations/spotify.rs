@@ -271,6 +271,38 @@ impl AppIntegration for SpotifyIntegration {
                 Ok(IntegrationResult::success(format!("Searching for: {}", query)))
             }
             
+            "spotify_play_song" => {
+                let query = params.get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "Missing search query".to_string())?;
+                
+                // Open YouTube with search - video results typically autoplay on click
+                // This is more reliable than Spotify URI which doesn't always work
+                let encoded_query = query.replace(' ', "+");
+                
+                // Use YouTube search with video filter for music
+                let youtube_url = format!(
+                    "https://www.youtube.com/results?search_query={}+song+music",
+                    encoded_query
+                );
+                
+                #[cfg(windows)]
+                {
+                    let _ = Command::new("cmd")
+                        .args(["/C", "start", "", &youtube_url])
+                        .spawn();
+                }
+                
+                #[cfg(not(windows))]
+                {
+                    let _ = Command::new("open")
+                        .arg(&youtube_url)
+                        .spawn();
+                }
+                
+                Ok(IntegrationResult::success(format!("Searching: {} - click to play", query)))
+            }
+            
             "spotify_open" => {
                 Self::open_spotify_uri("spotify:")?;
                 Ok(IntegrationResult::success("Opened Spotify"))

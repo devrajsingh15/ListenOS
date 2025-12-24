@@ -35,6 +35,69 @@ fn extract_number(text: &str) -> Option<u32> {
         .find_map(|word| word.parse::<u32>().ok())
 }
 
+/// Post-process dictation text to clean up common issues
+fn post_process_dictation(text: &str) -> String {
+    let mut result = text.to_string();
+    
+    // Remove multiple consecutive spaces
+    while result.contains("  ") {
+        result = result.replace("  ", " ");
+    }
+    
+    // Trim leading/trailing whitespace
+    result = result.trim().to_string();
+    
+    // Fix spacing around punctuation
+    result = result.replace(" .", ".");
+    result = result.replace(" ,", ",");
+    result = result.replace(" ?", "?");
+    result = result.replace(" !", "!");
+    result = result.replace(" :", ":");
+    result = result.replace(" ;", ";");
+    
+    // Fix common spoken punctuation that wasn't converted
+    result = result.replace(" period", ".");
+    result = result.replace(" comma", ",");
+    result = result.replace(" question mark", "?");
+    result = result.replace(" exclamation point", "!");
+    result = result.replace(" exclamation mark", "!");
+    result = result.replace(" colon", ":");
+    result = result.replace(" semicolon", ";");
+    result = result.replace(" new line", "\n");
+    result = result.replace(" new paragraph", "\n\n");
+    
+    // Remove common filler words (optional - comment out if users want them)
+    // These are often unintentional in voice dictation
+    let filler_patterns = [
+        (" um ", " "),
+        (" uh ", " "),
+        (" like ", " "), // Note: might remove valid uses, be careful
+        (" you know ", " "),
+    ];
+    
+    // Only remove fillers if they appear at the start of sentences
+    // to avoid removing valid uses in the middle
+    let filler_starters = ["Um ", "Uh ", "Like ", "So ", "Well "];
+    for filler in filler_starters {
+        if result.starts_with(filler) {
+            result = result[filler.len()..].to_string();
+            // Re-capitalize the first letter
+            if let Some(first_char) = result.chars().next() {
+                result = first_char.to_uppercase().to_string() + &result[first_char.len_utf8()..];
+            }
+        }
+    }
+    
+    // Ensure first letter is capitalized (if it starts with a letter)
+    if let Some(first_char) = result.chars().next() {
+        if first_char.is_alphabetic() && first_char.is_lowercase() {
+            result = first_char.to_uppercase().to_string() + &result[first_char.len_utf8()..];
+        }
+    }
+    
+    result
+}
+
 /// Cloud configuration (simplified - keys are embedded)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudConfig {
@@ -220,6 +283,12 @@ pub enum ActionType {
     
     // Custom commands
     CustomCommand,      // Execute a user-defined custom command
+    
+    // Keyboard shortcuts (copy, paste, undo, etc.)
+    KeyboardShortcut,   // Execute a keyboard shortcut
+    
+    // Window management
+    WindowControl,      // Control windows (minimize, maximize, close, etc.)
 }
 
 /// Groq API client - Ultra-fast transcription and LLM
@@ -370,9 +439,28 @@ impl GroqClient {
     }
 
     /// Detect if the text is a simple command that can be handled locally
+    /// 
+    /// IMPORTANT: This should only catch UNAMBIGUOUS commands.
+    /// When in doubt, let the LLM decide (it can distinguish dictation from commands).
+    /// Only detect commands that are:
+    /// 1. Short (1-4 words typically)
+    /// 2. Start with a clear command verb
+    /// 3. Have no ambiguity with normal dictation
     fn detect_local_command(&self, text: &str) -> Option<ActionResult> {
+        // Pre-process: clean up transcription artifacts
         let t = text.trim().to_lowercase();
+        // Remove trailing punctuation
         let t = t.trim_end_matches('.').trim_end_matches(',').trim_end_matches('!').trim_end_matches('?');
+        // Remove leading punctuation that Whisper sometimes adds
+        let t = t.trim_start_matches(',').trim_start_matches('.').trim();
+        // Normalize multiple spaces and remove commas between words (Whisper artifact)
+        let t = t.replace(", ", " ").replace("  ", " ");
+        
+        // Count words - if too long, probably dictation, let LLM handle it
+        let word_count = t.split_whitespace().count();
+        if word_count > 6 {
+            return None; // Too long to be a simple command
+        }
         
         // System controls
         if t.contains("shutdown") || t.contains("shut down") {
@@ -390,10 +478,30 @@ impl GroqClient {
         if t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "screenshot"})));
         }
+        // Bluetooth control - distinguish between toggle and settings
         if t.contains("bluetooth") {
+            // Check if user wants to turn on/off/enable/disable
+            if t.contains("turn on") || t.contains("enable") || t.contains("switch on") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth_toggle", "enable": true})));
+            } else if t.contains("turn off") || t.contains("disable") || t.contains("switch off") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth_toggle", "enable": false})));
+            } else if t.contains("toggle") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth_toggle"})));
+            }
+            // Default: open settings
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth"})));
         }
+        // WiFi control - distinguish between toggle and settings
         if t.contains("wifi") || t.contains("wi-fi") {
+            // Check if user wants to turn on/off/enable/disable
+            if t.contains("turn on") || t.contains("enable") || t.contains("switch on") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi_toggle", "enable": true})));
+            } else if t.contains("turn off") || t.contains("disable") || t.contains("switch off") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi_toggle", "enable": false})));
+            } else if t.contains("toggle") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi_toggle"})));
+            }
+            // Default: open settings
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi"})));
         }
         if t.contains("brightness") {
@@ -434,22 +542,45 @@ impl GroqClient {
         }
         
         // App launching - check for websites first, then apps
-        if t.starts_with("open ") || t.starts_with("launch ") || t.starts_with("start ") {
-            // Clean up the app name - remove punctuation and extra words
-            let app_name = t
-                .replace("open ", "")
-                .replace("launch ", "")
-                .replace("start ", "")
-                .trim()
-                .trim_end_matches('.')
-                .trim_end_matches(',')
-                .trim_end_matches('!')
-                .trim_end_matches('?')
-                .to_string();
+        // Match various patterns: "open chrome", "open, chrome", "open. chrome", etc.
+        let open_patterns = ["open ", "open, ", "open. ", "launch ", "start "];
+        let has_open_prefix = open_patterns.iter().any(|p| t.starts_with(p));
+        
+        // Also match if it's just "open X" without space issues
+        let words: Vec<&str> = t.split_whitespace().collect();
+        let is_open_command = words.len() >= 2 && 
+            (words[0] == "open" || words[0] == "launch" || words[0] == "start" ||
+             words[0] == "open," || words[0] == "open.");
+        
+        if has_open_prefix || is_open_command {
+            // Clean up the app name - remove command word and punctuation
+            let app_name = if is_open_command {
+                // Join all words after the first command word
+                words[1..].join(" ")
+                    .trim_end_matches('.')
+                    .trim_end_matches(',')
+                    .trim_end_matches('!')
+                    .trim_end_matches('?')
+                    .to_string()
+            } else {
+                t.replace("open, ", "")
+                    .replace("open. ", "")
+                    .replace("open ", "")
+                    .replace("launch ", "")
+                    .replace("start ", "")
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim_end_matches(',')
+                    .trim_end_matches('!')
+                    .trim_end_matches('?')
+                    .to_string()
+            };
             
             if app_name.is_empty() {
                 return None;
             }
+            
+            log::info!("Detected app open command: '{}' -> app: '{}'", t, app_name);
             
             // OS-aware system app aliases
             // These map user-friendly names to the correct app name for the execute_action handler
@@ -506,11 +637,12 @@ impl GroqClient {
             }
             
             // Check if it's a website that should open in browser
+            // Use EXACT match to avoid "netflix" matching "x"
             let web_apps = [
                 ("youtube", "https://youtube.com"),
                 ("gmail", "https://gmail.com"),
                 ("twitter", "https://twitter.com"),
-                ("x", "https://x.com"),
+                ("x", "https://x.com"),  // Must be exact match
                 ("facebook", "https://facebook.com"),
                 ("instagram", "https://instagram.com"),
                 ("linkedin", "https://linkedin.com"),
@@ -521,7 +653,13 @@ impl GroqClient {
             ];
             
             for (name, url) in web_apps {
-                if app_name.contains(name) {
+                // Use exact match for short names like "x", contains for others
+                let matches = if name.len() <= 2 {
+                    app_name == *name
+                } else {
+                    app_name == *name || app_name.contains(name)
+                };
+                if matches {
                     return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
                 }
             }
@@ -545,14 +683,109 @@ impl GroqClient {
         }
         
         // Media control (Spotify/general)
-        if t == "play" || t == "pause" || t == "stop music" || t == "resume" || t == "resume music" || t.contains("play music") || t.contains("pause music") {
+        // Simple controls: play, pause, next, previous
+        if t == "play" || t == "pause" || t == "stop music" || t == "resume" || t == "resume music" || t == "play music" || t == "pause music" {
             return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "play_pause"})));
         }
         if t == "next" || t == "skip" || t == "next song" || t == "next track" {
             return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "next"})));
         }
-        if t == "previous" || t == "previous song" || t == "go back" || t == "last song" {
+        if t == "previous" || t == "previous song" || t == "last song" {
             return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "previous"})));
+        }
+        
+        // Play specific song/artist - "play [song name]" or "play [artist]"
+        // Opens Spotify, searches, and plays the first result
+        if t.starts_with("play ") && word_count >= 2 && word_count <= 6 {
+            let song_query = t.replace("play ", "").trim().to_string();
+            if !song_query.is_empty() && song_query != "music" {
+                return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({
+                    "action": "play_song",
+                    "query": song_query
+                })));
+            }
+        }
+        
+        // Keyboard shortcuts (clipboard, editing)
+        if t == "copy" || t == "copy that" || t == "copy this" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "copy"})));
+        }
+        if t == "paste" || t == "paste that" || t == "paste it" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "paste"})));
+        }
+        if t == "cut" || t == "cut that" || t == "cut this" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "cut"})));
+        }
+        if t == "select all" || t == "select everything" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "select_all"})));
+        }
+        if t == "undo" || t == "undo that" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "undo"})));
+        }
+        if t == "redo" || t == "redo that" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "redo"})));
+        }
+        if t == "save" || t == "save file" || t == "save this" || t == "save it" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "save"})));
+        }
+        if t == "find" || t == "search here" || t == "find in page" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "find"})));
+        }
+        if t == "new tab" || t == "open new tab" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "new_tab"})));
+        }
+        if t == "close tab" || t == "close this tab" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "close_tab"})));
+        }
+        if t == "new window" || t == "open new window" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "new_window"})));
+        }
+        if t == "refresh" || t == "reload" || t == "reload page" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "refresh"})));
+        }
+        if t == "go back" || t == "back" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "back"})));
+        }
+        if t == "go forward" || t == "forward" {
+            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "forward"})));
+        }
+        
+        // Window management
+        if t == "minimize" || t == "minimize window" || t == "minimize this" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "minimize"})));
+        }
+        if t == "maximize" || t == "maximize window" || t == "maximize this" || t == "full screen" || t == "fullscreen" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "maximize"})));
+        }
+        if t == "close window" || t == "close this window" || t == "close this" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "close"})));
+        }
+        if t == "switch window" || t == "switch app" || t == "next window" || t == "alt tab" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "switch"})));
+        }
+        if t == "snap left" || t == "move left" || t == "window left" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "snap_left"})));
+        }
+        if t == "snap right" || t == "move right" || t == "window right" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "snap_right"})));
+        }
+        if t == "show desktop" || t == "desktop" || t == "minimize all" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "show_desktop"})));
+        }
+        if t == "restore" || t == "restore window" {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "restore"})));
+        }
+        
+        // Quick responses (time, date, etc.)
+        if t.contains("what time") || t.contains("what's the time") || t == "time" {
+            let now = chrono::Local::now();
+            let time_str = now.format("%I:%M %p").to_string();
+            return Some(ActionResult::respond(format!("It's {}", time_str)));
+        }
+        if t.contains("what day") || t.contains("what's today") || t.contains("today's date") || t.contains("what date") {
+            let now = chrono::Local::now();
+            let date_str = now.format("%A, %B %d, %Y").to_string();
+            return Some(ActionResult::respond(format!("Today is {}", date_str)));
         }
         
         None
@@ -781,7 +1014,7 @@ Examples with VERY CASUAL style:
                     return Ok(ActionResult {
                         action_type: ActionType::TypeText,
                         payload: serde_json::json!({}),
-                        refined_text: Some(response.to_string()),
+                        refined_text: Some(post_process_dictation(response)),
                         response_text: None,
                         requires_confirmation: false,
                     });
@@ -796,17 +1029,19 @@ Examples with VERY CASUAL style:
             "discord_control" => ActionType::DiscordControl,
             "system_control" => ActionType::SystemControl,
             "custom_command" => ActionType::CustomCommand,
+            "keyboard_shortcut" => ActionType::KeyboardShortcut,
+            "window_control" => ActionType::WindowControl,
             "no_action" => ActionType::NoAction,
             _ => ActionType::TypeText,
         };
 
-        // For type_text, ensure we have text to type
+        // For type_text, ensure we have text to type and post-process it
         let refined_text = if action_type == ActionType::TypeText {
             parsed["refined_text"]
                 .as_str()
-                .map(|s| s.to_string())
+                .map(|s| post_process_dictation(s))
                 // Fallback: use original transcription if no refined_text
-                .or_else(|| Some(original_text.to_string()))
+                .or_else(|| Some(post_process_dictation(original_text)))
         } else {
             parsed["refined_text"].as_str().map(|s| s.to_string())
         };

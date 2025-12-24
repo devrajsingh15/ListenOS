@@ -9,13 +9,53 @@ import {
   onShortcutPressed,
   onShortcutReleased,
   hideAssistant,
+  VoiceProcessingResult,
 } from "@/lib/tauri";
 
 type AssistantState = "idle" | "listening" | "processing" | "success" | "error";
 
+// Format action type for display
+function formatActionFeedback(result: VoiceProcessingResult): string | null {
+  const actionType = result.action?.action_type;
+  if (!actionType || actionType === "NoAction" || actionType === "TypeText") {
+    return null; // Don't show feedback for typing or no action
+  }
+  
+  // Format action type to readable text
+  const formatted = actionType
+    .replace(/([A-Z])/g, " $1") // Add space before caps
+    .trim()
+    .toLowerCase();
+  
+  // Get specific feedback based on action
+  switch (actionType) {
+    case "OpenApp":
+      return `Opening ${result.action?.payload?.app || "app"}`;
+    case "WebSearch":
+      return `Searching: ${result.action?.payload?.query || "..."}`;
+    case "OpenUrl":
+      return "Opening URL";
+    case "VolumeControl":
+      return `Volume ${result.action?.payload?.direction || "changed"}`;
+    case "KeyboardShortcut":
+      return `${result.action?.payload?.shortcut || "Shortcut"}`;
+    case "WindowControl":
+      return `Window: ${result.action?.payload?.action || "control"}`;
+    case "SpotifyControl":
+      return `Media: ${result.action?.payload?.action || "control"}`;
+    case "SystemControl":
+      return `System: ${result.action?.payload?.action || "control"}`;
+    case "Respond":
+      return result.response_text ? result.response_text.slice(0, 50) : null;
+    default:
+      return formatted;
+  }
+}
+
 export default function AssistantPage() {
   const [state, setState] = useState<AssistantState>("listening");
   const [mounted, setMounted] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   const stateRef = useRef<AssistantState>("listening");
 
@@ -41,6 +81,7 @@ export default function AssistantPage() {
   const stop = useCallback(async () => {
     if (stateRef.current !== "listening") return;
     setState("processing");
+    setFeedback(null);
     try {
       const result = await stopListening();
       // If no input detected, silently dismiss without any animation
@@ -49,17 +90,26 @@ export default function AssistantPage() {
         if (isTauri()) hideAssistant().catch(() => {});
         return;
       }
+      
+      // Get feedback text for the action
+      const feedbackText = formatActionFeedback(result);
+      if (feedbackText) {
+        setFeedback(feedbackText);
+      }
+      
       setState("success");
       setTimeout(() => {
         if (isTauri()) hideAssistant().catch(() => {});
         setState("idle");
-      }, 600);
+        setFeedback(null);
+      }, feedbackText ? 1000 : 600); // Show feedback a bit longer
     } catch (e) {
       console.warn("Stop listening failed:", e);
       setState("error");
       setTimeout(() => {
         if (isTauri()) hideAssistant().catch(() => {});
         setState("idle");
+        setFeedback(null);
       }, 800);
     }
   }, []);
@@ -95,13 +145,13 @@ export default function AssistantPage() {
       className="h-full w-full flex items-center justify-center"
       style={{ background: "transparent" }}
     >
-      <div className="relative flex items-center justify-center w-full h-full">
-      <AnimatePresence mode="wait">
-        {state === "listening" && <ListeningAnimation key="listening" />}
-        {state === "processing" && <ProcessingAnimation key="processing" />}
-        {state === "success" && <SuccessAnimation key="success" />}
-        {state === "error" && <ErrorAnimation key="error" />}
-      </AnimatePresence>
+      <div className="relative flex flex-col items-center justify-center w-full h-full gap-2">
+        <AnimatePresence mode="wait">
+          {state === "listening" && <ListeningAnimation key="listening" />}
+          {state === "processing" && <ProcessingAnimation key="processing" />}
+          {state === "success" && <SuccessAnimation key="success" feedback={feedback} />}
+          {state === "error" && <ErrorAnimation key="error" />}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -192,18 +242,25 @@ function ProcessingAnimation() {
   );
 }
 
-// Success: Simple Check (no text)
-function SuccessAnimation() {
+// Success: Check with optional feedback text
+function SuccessAnimation({ feedback }: { feedback: string | null }) {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
-      className="flex items-center justify-center text-green-400"
+      className="flex flex-col items-center justify-center gap-1"
     >
-      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-      </svg>
+      <div className="flex items-center gap-2 text-green-400">
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+        </svg>
+        {feedback && (
+          <span className="text-xs text-white/90 font-medium max-w-48 truncate">
+            {feedback}
+          </span>
+        )}
+      </div>
     </motion.div>
   );
 }

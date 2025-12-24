@@ -560,65 +560,126 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
             {
                 use std::process::Command;
                 
+                // Try multiple methods in order:
+                // 1. Known app mappings (native commands, URI schemes)
+                // 2. Start by name
+                // 3. URI scheme fallback
+                // 4. Web fallback for popular apps
+                
                 // Map common app names to Windows commands/URIs
-                let launch_cmd = match app.as_str() {
+                let known_apps: &[(&str, &str, Option<&str>)] = &[
+                    // (name, primary_cmd, web_fallback)
                     // Windows Store Apps - use URI schemes
-                    "settings" | "windows settings" => "start ms-settings:".to_string(),
-                    "store" | "microsoft store" => "start ms-windows-store:".to_string(),
-                    "mail" | "outlook" => "start outlookcal:".to_string(),
-                    "calendar" => "start outlookcal:".to_string(),
-                    "calculator" => "start calculator:".to_string(),
-                    "camera" => "start microsoft.windows.camera:".to_string(),
-                    "maps" => "start bingmaps:".to_string(),
-                    "photos" => "start ms-photos:".to_string(),
-                    "clock" | "alarms" => "start ms-clock:".to_string(),
-                    "weather" => "start bingweather:".to_string(),
+                    ("settings", "ms-settings:", None),
+                    ("windows settings", "ms-settings:", None),
+                    ("store", "ms-windows-store:", None),
+                    ("microsoft store", "ms-windows-store:", None),
+                    ("mail", "outlookmail:", Some("https://outlook.live.com")),
+                    ("outlook", "outlookmail:", Some("https://outlook.live.com")),
+                    ("calendar", "outlookcal:", Some("https://outlook.live.com/calendar")),
+                    ("calculator", "calculator:", None),
+                    ("camera", "microsoft.windows.camera:", None),
+                    ("maps", "bingmaps:", Some("https://maps.google.com")),
+                    ("photos", "ms-photos:", None),
+                    ("clock", "ms-clock:", None),
+                    ("alarms", "ms-clock:", None),
+                    ("weather", "bingweather:", Some("https://weather.com")),
                     
-                    // Popular apps with URI schemes
-                    "whatsapp" => "start whatsapp:".to_string(),
-                    "spotify" => "start spotify:".to_string(),
-                    "discord" => "start discord:".to_string(),
-                    "slack" => "start slack:".to_string(),
-                    "teams" | "microsoft teams" => "start msteams:".to_string(),
-                    "zoom" => "start zoommtg:".to_string(),
-                    "telegram" => "start tg:".to_string(),
-                    
-                    // Web-based - open in browser
-                    "youtube" => "start https://youtube.com".to_string(),
-                    "gmail" => "start https://gmail.com".to_string(),
-                    "google" => "start https://google.com".to_string(),
-                    "twitter" | "x" => "start https://x.com".to_string(),
-                    "facebook" => "start https://facebook.com".to_string(),
-                    "instagram" => "start https://instagram.com".to_string(),
-                    "linkedin" => "start https://linkedin.com".to_string(),
-                    "reddit" => "start https://reddit.com".to_string(),
-                    "github" => "start https://github.com".to_string(),
-                    "netflix" => "start https://netflix.com".to_string(),
+                    // Popular apps with URI schemes and web fallbacks
+                    ("whatsapp", "whatsapp:", Some("https://web.whatsapp.com")),
+                    ("spotify", "spotify:", Some("https://open.spotify.com")),
+                    ("discord", "discord:", Some("https://discord.com/app")),
+                    ("slack", "slack:", Some("https://app.slack.com")),
+                    ("teams", "msteams:", Some("https://teams.microsoft.com")),
+                    ("microsoft teams", "msteams:", Some("https://teams.microsoft.com")),
+                    ("zoom", "zoommtg:", Some("https://zoom.us/join")),
+                    ("telegram", "tg:", Some("https://web.telegram.org")),
                     
                     // Browsers
-                    "chrome" | "google chrome" => "start chrome".to_string(),
-                    "firefox" => "start firefox".to_string(),
-                    "edge" | "microsoft edge" => "start msedge".to_string(),
-                    "brave" => "start brave".to_string(),
+                    ("chrome", "chrome", None),
+                    ("google chrome", "chrome", None),
+                    ("firefox", "firefox", None),
+                    ("edge", "msedge", None),
+                    ("microsoft edge", "msedge", None),
+                    ("brave", "brave", None),
                     
                     // Common desktop apps
-                    "notepad" => "start notepad".to_string(),
-                    "word" | "microsoft word" => "start winword".to_string(),
-                    "excel" | "microsoft excel" => "start excel".to_string(),
-                    "powerpoint" => "start powerpnt".to_string(),
-                    "vscode" | "visual studio code" | "code" => "start code".to_string(),
-                    "terminal" | "cmd" | "command prompt" => "start cmd".to_string(),
-                    "powershell" => "start powershell".to_string(),
-                    "explorer" | "file explorer" | "files" => "start explorer".to_string(),
-                    "task manager" => "start taskmgr".to_string(),
-                    "control panel" => "start control".to_string(),
+                    ("notepad", "notepad", None),
+                    ("word", "winword", None),
+                    ("microsoft word", "winword", None),
+                    ("excel", "excel", None),
+                    ("microsoft excel", "excel", None),
+                    ("powerpoint", "powerpnt", None),
+                    ("vscode", "code", None),
+                    ("visual studio code", "code", None),
+                    ("code", "code", None),
+                    ("terminal", "wt", None), // Windows Terminal
+                    ("cmd", "cmd", None),
+                    ("command prompt", "cmd", None),
+                    ("powershell", "powershell", None),
+                    ("explorer", "explorer", None),
+                    ("file explorer", "explorer", None),
+                    ("files", "explorer", None),
+                    ("task manager", "taskmgr", None),
+                    ("control panel", "control", None),
                     
-                    // Fallback: try to start by name
-                    _ => format!("start {}", app),
-                };
+                    // Web-only apps
+                    ("youtube", "https://youtube.com", None),
+                    ("gmail", "https://gmail.com", None),
+                    ("google", "https://google.com", None),
+                    ("twitter", "https://x.com", None),
+                    ("x", "https://x.com", None),
+                    ("facebook", "https://facebook.com", None),
+                    ("instagram", "https://instagram.com", None),
+                    ("linkedin", "https://linkedin.com", None),
+                    ("reddit", "https://reddit.com", None),
+                    ("github", "https://github.com", None),
+                    ("netflix", "https://netflix.com", None),
+                ];
                 
+                // Find matching app
+                let app_info = known_apps.iter().find(|(name, _, _)| *name == app.as_str());
+                
+                if let Some((_, primary_cmd, web_fallback)) = app_info {
+                    // Try primary command first
+                    let launch_cmd = if primary_cmd.contains("://") || primary_cmd.ends_with(':') {
+                        format!("start {}", primary_cmd)
+                    } else {
+                        format!("start {}", primary_cmd)
+                    };
+                    
+                    let result = Command::new("cmd")
+                        .args(["/C", &launch_cmd])
+                        .output();
+                    
+                    match result {
+                        Ok(output) if output.status.success() => {
+                            return Ok(CommandResult {
+                                success: true,
+                                message: format!("Opened: {}", app),
+                                output: None,
+                            });
+                        }
+                        _ => {
+                            // Try web fallback if available
+                            if let Some(web_url) = web_fallback {
+                                log::info!("Primary launch failed, trying web fallback: {}", web_url);
+                                let _ = Command::new("cmd")
+                                    .args(["/C", "start", "", web_url])
+                                    .spawn();
+                                return Ok(CommandResult {
+                                    success: true,
+                                    message: format!("Opened {} (web)", app),
+                                    output: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                // Fallback: try to start by name directly
                 let result = Command::new("cmd")
-                    .args(["/C", &launch_cmd])
+                    .args(["/C", "start", &app])
                     .spawn();
                 
                 match result {
@@ -631,9 +692,50 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 }
             }
             
-            #[cfg(not(windows))]
+            #[cfg(target_os = "macos")]
             {
-                let cmd = format!("open -a \"{}\"", app);
+                use std::process::Command;
+                
+                // Try open -a first
+                let result = Command::new("open")
+                    .args(["-a", &app])
+                    .output();
+                
+                if let Ok(output) = result {
+                    if output.status.success() {
+                        return Ok(CommandResult {
+                            success: true,
+                            message: format!("Opened: {}", app),
+                            output: None,
+                        });
+                    }
+                }
+                
+                // Fallback to web version for known apps
+                let web_fallback: Option<&str> = match app.as_str() {
+                    "whatsapp" => Some("https://web.whatsapp.com"),
+                    "spotify" => Some("https://open.spotify.com"),
+                    "discord" => Some("https://discord.com/app"),
+                    "slack" => Some("https://app.slack.com"),
+                    "telegram" => Some("https://web.telegram.org"),
+                    _ => None,
+                };
+                
+                if let Some(url) = web_fallback {
+                    let _ = Command::new("open").arg(url).spawn();
+                    return Ok(CommandResult {
+                        success: true,
+                        message: format!("Opened {} (web)", app),
+                        output: None,
+                    });
+                }
+                
+                Err(format!("Could not find app: {}", app))
+            }
+            
+            #[cfg(not(any(windows, target_os = "macos")))]
+            {
+                let cmd = format!("xdg-open {} 2>/dev/null || open {}", app, app);
                 run_system_command(cmd).await
             }
         }
@@ -867,6 +969,14 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 output: None,
             })
         }
+        
+        ActionType::KeyboardShortcut => {
+            execute_keyboard_shortcut(action).await
+        }
+        
+        ActionType::WindowControl => {
+            execute_window_control(action).await
+        }
     }
 }
 
@@ -1033,6 +1143,281 @@ pub async fn run_system_command(command: String) -> Result<CommandResult, String
         })
     } else {
         Err(stderr)
+    }
+}
+
+// ============ Keyboard Shortcut Helpers ============
+
+/// Execute a keyboard shortcut (copy, paste, undo, etc.)
+async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResult, String> {
+    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
+    
+    let shortcut = action.payload.get("shortcut")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    
+    if shortcut.is_empty() {
+        return Err("No shortcut specified".to_string());
+    }
+    
+    log::info!("Executing keyboard shortcut: {}", shortcut);
+    
+    // Small delay to ensure focus is on the right window
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to create enigo: {}", e))?;
+    
+    let result = match shortcut {
+        "copy" => {
+            // Ctrl+C
+            send_key_combo(&mut enigo, &[Key::Control], 'c')
+        }
+        "paste" => {
+            // Ctrl+V
+            send_key_combo(&mut enigo, &[Key::Control], 'v')
+        }
+        "cut" => {
+            // Ctrl+X
+            send_key_combo(&mut enigo, &[Key::Control], 'x')
+        }
+        "select_all" => {
+            // Ctrl+A
+            send_key_combo(&mut enigo, &[Key::Control], 'a')
+        }
+        "undo" => {
+            // Ctrl+Z
+            send_key_combo(&mut enigo, &[Key::Control], 'z')
+        }
+        "redo" => {
+            // Ctrl+Y (Windows) or Ctrl+Shift+Z (cross-platform)
+            send_key_combo(&mut enigo, &[Key::Control], 'y')
+        }
+        "save" => {
+            // Ctrl+S
+            send_key_combo(&mut enigo, &[Key::Control], 's')
+        }
+        "find" => {
+            // Ctrl+F
+            send_key_combo(&mut enigo, &[Key::Control], 'f')
+        }
+        "new_tab" => {
+            // Ctrl+T
+            send_key_combo(&mut enigo, &[Key::Control], 't')
+        }
+        "close_tab" => {
+            // Ctrl+W
+            send_key_combo(&mut enigo, &[Key::Control], 'w')
+        }
+        "new_window" => {
+            // Ctrl+N
+            send_key_combo(&mut enigo, &[Key::Control], 'n')
+        }
+        "refresh" => {
+            // F5 or Ctrl+R
+            send_key_combo(&mut enigo, &[Key::Control], 'r')
+        }
+        "back" => {
+            // Alt+Left
+            enigo.key(Key::Alt, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::LeftArrow, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Alt, Direction::Release).ok();
+            Ok(())
+        }
+        "forward" => {
+            // Alt+Right
+            enigo.key(Key::Alt, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::RightArrow, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Alt, Direction::Release).ok();
+            Ok(())
+        }
+        _ => Err(format!("Unknown shortcut: {}", shortcut)),
+    };
+    
+    match result {
+        Ok(()) => Ok(CommandResult {
+            success: true,
+            message: format!("Executed: {}", shortcut),
+            output: None,
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+/// Helper to send a key combo like Ctrl+C
+fn send_key_combo(enigo: &mut enigo::Enigo, modifiers: &[enigo::Key], key: char) -> Result<(), String> {
+    use enigo::{Keyboard, Key, Direction};
+    
+    // Press modifiers
+    for modifier in modifiers {
+        enigo.key(*modifier, Direction::Press)
+            .map_err(|e| format!("Failed to press modifier: {}", e))?;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    
+    // Press and release the key
+    enigo.key(Key::Unicode(key), Direction::Click)
+        .map_err(|e| format!("Failed to press key: {}", e))?;
+    
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    
+    // Release modifiers in reverse order
+    for modifier in modifiers.iter().rev() {
+        enigo.key(*modifier, Direction::Release)
+            .map_err(|e| format!("Failed to release modifier: {}", e))?;
+    }
+    
+    Ok(())
+}
+
+// ============ Window Control Helpers ============
+
+/// Execute window control commands (minimize, maximize, close, etc.)
+async fn execute_window_control(action: &ActionResult) -> Result<CommandResult, String> {
+    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
+    
+    let window_action = action.payload.get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    
+    if window_action.is_empty() {
+        return Err("No window action specified".to_string());
+    }
+    
+    log::info!("Executing window control: {}", window_action);
+    
+    // Small delay to ensure focus is on the right window
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to create enigo: {}", e))?;
+    
+    let result = match window_action {
+        "minimize" => {
+            // Win+Down (minimize)
+            #[cfg(windows)]
+            {
+                enigo.key(Key::Meta, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::DownArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                // Cmd+M
+                enigo.key(Key::Meta, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Unicode('m'), Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            Ok(())
+        }
+        "maximize" => {
+            // Win+Up (maximize)
+            #[cfg(windows)]
+            {
+                enigo.key(Key::Meta, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::UpArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                // Ctrl+Cmd+F for fullscreen
+                enigo.key(Key::Control, Direction::Press).ok();
+                enigo.key(Key::Meta, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Unicode('f'), Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Meta, Direction::Release).ok();
+                enigo.key(Key::Control, Direction::Release).ok();
+            }
+            Ok(())
+        }
+        "close" => {
+            // Alt+F4 (Windows) or Cmd+W (macOS)
+            #[cfg(windows)]
+            {
+                enigo.key(Key::Alt, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::F4, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Alt, Direction::Release).ok();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                enigo.key(Key::Meta, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Unicode('w'), Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            Ok(())
+        }
+        "switch" => {
+            // Alt+Tab
+            enigo.key(Key::Alt, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Tab, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            enigo.key(Key::Alt, Direction::Release).ok();
+            Ok(())
+        }
+        "snap_left" => {
+            // Win+Left
+            enigo.key(Key::Meta, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::LeftArrow, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Meta, Direction::Release).ok();
+            Ok(())
+        }
+        "snap_right" => {
+            // Win+Right
+            enigo.key(Key::Meta, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::RightArrow, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Meta, Direction::Release).ok();
+            Ok(())
+        }
+        "show_desktop" => {
+            // Win+D
+            enigo.key(Key::Meta, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Unicode('d'), Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Meta, Direction::Release).ok();
+            Ok(())
+        }
+        "restore" => {
+            // Win+Up then Win+Down to restore from minimized/maximized
+            enigo.key(Key::Meta, Direction::Press).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::UpArrow, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            enigo.key(Key::DownArrow, Direction::Click).ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            enigo.key(Key::Meta, Direction::Release).ok();
+            Ok(())
+        }
+        _ => Err(format!("Unknown window action: {}", window_action)),
+    };
+    
+    match result {
+        Ok(()) => Ok(CommandResult {
+            success: true,
+            message: format!("Window: {}", window_action),
+            output: None,
+        }),
+        Err(e) => Err(e),
     }
 }
 
