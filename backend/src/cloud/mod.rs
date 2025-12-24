@@ -237,8 +237,8 @@ impl GroqClient {
     
     /// Transcribe audio with custom vocabulary hints
     pub async fn transcribe_with_hints(&self, audio_data: &[u8], dictionary_hints: &[String]) -> Result<TranscriptionResult, String> {
-        // Check rate limit before making API call
-        crate::rate_limit::check_stt_limit()?;
+        // Rate limiting disabled for testing
+        // crate::rate_limit::check_stt_limit()?;
         
         use reqwest::multipart::{Form, Part};
         
@@ -309,9 +309,16 @@ impl GroqClient {
         voice_context: &VoiceContext,
         conv_context: &ConversationContext,
     ) -> Result<ActionResult, String> {
-        // Check rate limit before making API call
-        crate::rate_limit::check_llm_limit()?;
+        // Rate limiting disabled for testing
+        // crate::rate_limit::check_llm_limit()?;
         
+        // 1. Check for local command execution FIRST (bypass LLM for speed/reliability)
+        if let Some(action) = self.detect_local_command(text) {
+            log::info!("Local command detected: {:?}", action.action_type);
+            return Ok(action);
+        }
+        
+        // 2. Fallback to LLM for complex queries
         let system_prompt = self.build_system_prompt(voice_context, conv_context);
         let user_message = format!(
             "User request: \"{}\"\n\nAnalyze and respond with the appropriate action.",
@@ -356,29 +363,127 @@ impl GroqClient {
         self.parse_llm_response(&parsed, text)
     }
 
+    /// Detect if the text is a simple command that can be handled locally
+    fn detect_local_command(&self, text: &str) -> Option<ActionResult> {
+        let t = text.trim().to_lowercase();
+        
+        // System controls
+        if t.contains("shutdown") || t.contains("shut down") {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "shutdown"})));
+        }
+        if t.contains("restart") || t.contains("reboot") {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "restart"})));
+        }
+        if t.contains("lock") && (t.contains("computer") || t.contains("screen") || t.contains("pc")) {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "lock"})));
+        }
+        if t.contains("sleep") && (t.contains("computer") || t.contains("pc")) {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "sleep"})));
+        }
+        if t.contains("screenshot") {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "screenshot"})));
+        }
+        if t.contains("bluetooth") && (t.contains("open") || t.contains("settings") || t.contains("on") || t.contains("off")) {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth"})));
+        }
+        if t.contains("wifi") && (t.contains("open") || t.contains("settings")) {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi"})));
+        }
+        
+        // App launching - check for websites first, then apps
+        if t.starts_with("open ") || t.starts_with("launch ") || t.starts_with("start ") {
+            // Clean up the app name - remove punctuation and extra words
+            let app_name = t
+                .replace("open ", "")
+                .replace("launch ", "")
+                .replace("start ", "")
+                .trim()
+                .trim_end_matches('.')
+                .trim_end_matches(',')
+                .trim_end_matches('!')
+                .trim_end_matches('?')
+                .to_string();
+            if !app_name.is_empty() {
+                // Check if it's a website that should open in browser
+                // Only web-only services - apps with native clients will use URI schemes
+                let web_apps = [
+                    ("youtube", "https://youtube.com"),
+                    ("gmail", "https://gmail.com"),
+                    ("twitter", "https://twitter.com"),
+                    ("x", "https://x.com"),
+                    ("facebook", "https://facebook.com"),
+                    ("instagram", "https://instagram.com"),
+                    ("linkedin", "https://linkedin.com"),
+                    ("reddit", "https://reddit.com"),
+                    ("github", "https://github.com"),
+                    ("netflix", "https://netflix.com"),
+                    ("amazon", "https://amazon.com"),
+                    // Native apps like WhatsApp, Spotify, Telegram use URI schemes in execute_action
+                ];
+                
+                for (name, url) in web_apps {
+                    if app_name.contains(name) {
+                        return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
+                    }
+                }
+                
+                // Otherwise treat as app
+                return Some(ActionResult::action(ActionType::OpenApp, serde_json::json!({"app": app_name})));
+            }
+        }
+        
+        // Web search
+        if t.starts_with("search ") || t.starts_with("google ") || t.starts_with("search for ") {
+            let query = t.replace("search ", "").replace("search for ", "").replace("google ", "").trim().to_string();
+            if !query.is_empty() {
+                return Some(ActionResult::action(ActionType::WebSearch, serde_json::json!({"query": query})));
+            }
+        }
+        
+        // Spotify
+        if t == "play" || t == "pause" || t == "stop music" || t == "resume music" {
+            return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "play_pause"})));
+        }
+        if t == "next" || t == "skip" || t == "next song" {
+            return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "next"})));
+        }
+        
+        None
+    }
+
     /// Build the system prompt with context
     fn build_system_prompt(&self, voice_context: &VoiceContext, conv_context: &ConversationContext) -> String {
-        let mut prompt = String::from(r#"You are ListenOS, a voice-to-action assistant. Your PRIMARY job is to help users type text and execute commands.
+        let mut prompt = String::from(r#"You are ListenOS, a voice-to-action assistant. Analyze user voice input and decide: COMMAND or DICTATION.
 
-=== CRITICAL DECISION TREE (FOLLOW IN ORDER) ===
+=== COMMAND DETECTION ===
 
-STEP 1: Does the input contain an EXPLICIT COMMAND KEYWORD?
-Command keywords: "open", "launch", "start", "search", "google", "play", "pause", "stop", "next", "previous", "skip", "mute", "unmute", "volume", "lock", "screenshot", "clipboard", "translate", "summarize", "format", "shutdown", "restart", "reboot", "sleep", "brightness", "bluetooth", "wifi"
+Treat as COMMAND if the input:
+1. STARTS with a command verb: open, launch, start, search, google, play, pause, stop, next, previous, skip, mute, unmute, volume, lock, screenshot, shutdown, restart, reboot, sleep, brightness, bluetooth, wifi, close, quit, exit
+2. Is a SHORT phrase (1-4 words) that matches a command pattern
+3. Contains "my computer", "the computer", "my PC" with a system action
 
-If NO command keyword found → USE type_text (this is the DEFAULT)
-If YES command keyword found → Continue to Step 2
+Examples of COMMANDS (execute these):
+- "Open Chrome" → open_app
+- "Search for pizza" → web_search  
+- "Play music" → spotify_control
+- "Pause" → spotify_control
+- "Lock my computer" → system_control
+- "Shutdown" → system_control
+- "Volume up" → volume_control
+- "Take a screenshot" → system_control
 
-STEP 2: Is the command keyword at the START of the sentence?
-- "Open Chrome" → YES, it's a command
-- "I want to open a new document" → NO, user is dictating about opening something
-- "Search for restaurants" → YES, it's a command  
-- "I need to search for a solution" → NO, user is dictating
+=== DICTATION ===
 
-If command keyword is NOT at the start → USE type_text
-If command keyword IS at the start → Execute the appropriate command
+Treat as DICTATION (type_text) if:
+1. It's a complete sentence the user wants typed
+2. Command words appear MID-SENTENCE (not at start)
+3. It's conversational or descriptive text
 
-=== THE GOLDEN RULE ===
-WHEN IN DOUBT, USE type_text. It's better to type text that the user can delete than to execute a wrong command.
+Examples of DICTATION (type these):
+- "I want to open a new chapter" → type_text (open is mid-sentence)
+- "The meeting was great" → type_text
+- "Please search for the document" → type_text (starts with please)
+- "Can you help me" → type_text
 
 "#);
 

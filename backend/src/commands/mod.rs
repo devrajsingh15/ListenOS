@@ -211,11 +211,20 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     };
 
-    // Detect silence at audio level - if RMS is extremely low, there was no real speech
-    // Threshold 0.001 catches digital silence while allowing quiet speech through
-    let is_silent = rms < 0.001;
+    // Detect silence at audio level - filter Whisper hallucinations
+    // RMS < 0.002 means essentially silence (mic noise only)
+    let is_silent = rms < 0.002;
+    
+    // Also filter known Whisper hallucination phrases that appear on silence
+    let hallucination_phrases = [
+        "thank you", "thanks", "thanks for watching", "thank you for watching",
+        "subscribe", "like and subscribe", "see you", "bye", "goodbye",
+        "you", ".", "..", "...",
+    ];
+    let text_lower = transcription.text.trim().to_lowercase();
+    let is_hallucination = hallucination_phrases.iter().any(|&p| text_lower == p);
 
-    if transcription.text.trim().is_empty() || is_silent {
+    if transcription.text.trim().is_empty() || (is_silent && is_hallucination) {
         log::info!("No speech detected (RMS: {:.4}, text: '{}')", rms, transcription.text);
         let mut is_processing = state.is_processing.lock().await;
         *is_processing = false;
