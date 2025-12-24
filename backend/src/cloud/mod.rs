@@ -29,6 +29,12 @@ pub fn get_deepgram_key() -> String {
     ).unwrap_or_default()
 }
 
+/// Extract a number from text (for brightness level, volume, etc.)
+fn extract_number(text: &str) -> Option<u32> {
+    text.split_whitespace()
+        .find_map(|word| word.parse::<u32>().ok())
+}
+
 /// Cloud configuration (simplified - keys are embedded)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudConfig {
@@ -366,6 +372,7 @@ impl GroqClient {
     /// Detect if the text is a simple command that can be handled locally
     fn detect_local_command(&self, text: &str) -> Option<ActionResult> {
         let t = text.trim().to_lowercase();
+        let t = t.trim_end_matches('.').trim_end_matches(',').trim_end_matches('!').trim_end_matches('?');
         
         // System controls
         if t.contains("shutdown") || t.contains("shut down") {
@@ -374,20 +381,56 @@ impl GroqClient {
         if t.contains("restart") || t.contains("reboot") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "restart"})));
         }
-        if t.contains("lock") && (t.contains("computer") || t.contains("screen") || t.contains("pc")) {
+        if t.contains("lock") && (t.contains("computer") || t.contains("screen") || t.contains("pc") || t.contains("my") || t == "lock") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "lock"})));
         }
-        if t.contains("sleep") && (t.contains("computer") || t.contains("pc")) {
+        if t.contains("sleep") && (t.contains("computer") || t.contains("pc") || t.contains("my") || t == "sleep") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "sleep"})));
         }
-        if t.contains("screenshot") {
+        if t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "screenshot"})));
         }
-        if t.contains("bluetooth") && (t.contains("open") || t.contains("settings") || t.contains("on") || t.contains("off")) {
+        if t.contains("bluetooth") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth"})));
         }
-        if t.contains("wifi") && (t.contains("open") || t.contains("settings")) {
+        if t.contains("wifi") || t.contains("wi-fi") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi"})));
+        }
+        if t.contains("brightness") {
+            // Try to extract level
+            let level = extract_number(&t).unwrap_or(50);
+            if t.contains("up") || t.contains("increase") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "brightness", "level": "up"})));
+            } else if t.contains("down") || t.contains("decrease") || t.contains("dim") {
+                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "brightness", "level": "down"})));
+            }
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "brightness", "level": level})));
+        }
+        if t.contains("night light") || t.contains("night mode") || t.contains("blue light") {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "night_light"})));
+        }
+        if t.contains("do not disturb") || t.contains("dnd") || t.contains("focus mode") {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "dnd"})));
+        }
+        if t.contains("empty") && (t.contains("trash") || t.contains("recycle") || t.contains("bin")) {
+            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "recycle_bin"})));
+        }
+        
+        // Volume control
+        if t.contains("volume") || t.contains("louder") || t.contains("quieter") {
+            let direction = if t.contains("up") || t.contains("louder") || t.contains("increase") {
+                "up"
+            } else if t.contains("down") || t.contains("quieter") || t.contains("decrease") || t.contains("lower") {
+                "down"
+            } else if t.contains("mute") {
+                "mute"
+            } else {
+                "up" // default
+            };
+            return Some(ActionResult::action(ActionType::VolumeControl, serde_json::json!({"direction": direction})));
+        }
+        if t == "mute" || t == "unmute" {
+            return Some(ActionResult::action(ActionType::VolumeControl, serde_json::json!({"direction": "mute"})));
         }
         
         // App launching - check for websites first, then apps
@@ -403,49 +446,113 @@ impl GroqClient {
                 .trim_end_matches('!')
                 .trim_end_matches('?')
                 .to_string();
-            if !app_name.is_empty() {
-                // Check if it's a website that should open in browser
-                // Only web-only services - apps with native clients will use URI schemes
-                let web_apps = [
-                    ("youtube", "https://youtube.com"),
-                    ("gmail", "https://gmail.com"),
-                    ("twitter", "https://twitter.com"),
-                    ("x", "https://x.com"),
-                    ("facebook", "https://facebook.com"),
-                    ("instagram", "https://instagram.com"),
-                    ("linkedin", "https://linkedin.com"),
-                    ("reddit", "https://reddit.com"),
-                    ("github", "https://github.com"),
-                    ("netflix", "https://netflix.com"),
-                    ("amazon", "https://amazon.com"),
-                    // Native apps like WhatsApp, Spotify, Telegram use URI schemes in execute_action
-                ];
-                
-                for (name, url) in web_apps {
-                    if app_name.contains(name) {
-                        return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
-                    }
-                }
-                
-                // Otherwise treat as app
-                return Some(ActionResult::action(ActionType::OpenApp, serde_json::json!({"app": app_name})));
+            
+            if app_name.is_empty() {
+                return None;
             }
+            
+            // OS-aware system app aliases
+            // These map user-friendly names to the correct app name for the execute_action handler
+            let system_aliases: &[(&str, &str)] = match std::env::consts::OS {
+                "windows" => &[
+                    ("file explorer", "explorer"),
+                    ("files", "explorer"),
+                    ("explorer", "explorer"),
+                    ("my computer", "explorer"),
+                    ("this pc", "explorer"),
+                    ("finder", "explorer"), // macOS user on Windows
+                    ("settings", "settings"),
+                    ("control panel", "control panel"),
+                    ("task manager", "task manager"),
+                    ("terminal", "terminal"),
+                    ("command prompt", "cmd"),
+                    ("cmd", "cmd"),
+                    ("powershell", "powershell"),
+                    ("notepad", "notepad"),
+                    ("calculator", "calculator"),
+                    ("calendar", "calendar"),
+                    ("camera", "camera"),
+                    ("clock", "clock"),
+                    ("photos", "photos"),
+                    ("store", "store"),
+                    ("microsoft store", "store"),
+                ],
+                "macos" => &[
+                    ("finder", "finder"),
+                    ("files", "finder"),
+                    ("file explorer", "finder"),
+                    ("explorer", "finder"),
+                    ("settings", "system preferences"),
+                    ("system preferences", "system preferences"),
+                    ("terminal", "terminal"),
+                    ("activity monitor", "activity monitor"),
+                    ("task manager", "activity monitor"),
+                ],
+                "linux" => &[
+                    ("files", "nautilus"),
+                    ("file explorer", "nautilus"),
+                    ("file manager", "nautilus"),
+                    ("settings", "gnome-control-center"),
+                    ("terminal", "gnome-terminal"),
+                ],
+                _ => &[],
+            };
+            
+            // Check system aliases first
+            for (alias, app) in system_aliases {
+                if app_name == *alias || app_name.contains(alias) {
+                    return Some(ActionResult::action(ActionType::OpenApp, serde_json::json!({"app": *app})));
+                }
+            }
+            
+            // Check if it's a website that should open in browser
+            let web_apps = [
+                ("youtube", "https://youtube.com"),
+                ("gmail", "https://gmail.com"),
+                ("twitter", "https://twitter.com"),
+                ("x", "https://x.com"),
+                ("facebook", "https://facebook.com"),
+                ("instagram", "https://instagram.com"),
+                ("linkedin", "https://linkedin.com"),
+                ("reddit", "https://reddit.com"),
+                ("github", "https://github.com"),
+                ("netflix", "https://netflix.com"),
+                ("amazon", "https://amazon.com"),
+            ];
+            
+            for (name, url) in web_apps {
+                if app_name.contains(name) {
+                    return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
+                }
+            }
+            
+            // Otherwise treat as app (execute_action has more mappings)
+            return Some(ActionResult::action(ActionType::OpenApp, serde_json::json!({"app": app_name})));
         }
         
         // Web search
-        if t.starts_with("search ") || t.starts_with("google ") || t.starts_with("search for ") {
-            let query = t.replace("search ", "").replace("search for ", "").replace("google ", "").trim().to_string();
+        if t.starts_with("search ") || t.starts_with("google ") || t.starts_with("search for ") || t.starts_with("look up ") {
+            let query = t
+                .replace("search for ", "")
+                .replace("search ", "")
+                .replace("google ", "")
+                .replace("look up ", "")
+                .trim()
+                .to_string();
             if !query.is_empty() {
                 return Some(ActionResult::action(ActionType::WebSearch, serde_json::json!({"query": query})));
             }
         }
         
-        // Spotify
-        if t == "play" || t == "pause" || t == "stop music" || t == "resume music" {
+        // Media control (Spotify/general)
+        if t == "play" || t == "pause" || t == "stop music" || t == "resume" || t == "resume music" || t.contains("play music") || t.contains("pause music") {
             return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "play_pause"})));
         }
-        if t == "next" || t == "skip" || t == "next song" {
+        if t == "next" || t == "skip" || t == "next song" || t == "next track" {
             return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "next"})));
+        }
+        if t == "previous" || t == "previous song" || t == "go back" || t == "last song" {
+            return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "previous"})));
         }
         
         None
