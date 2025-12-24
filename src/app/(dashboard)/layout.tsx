@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Theme } from "@radix-ui/themes";
 import { AuthProvider } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
+import { ErrorNotification } from "@/components/ErrorNotification";
 import "../globals.css";
 
 const inter = Inter({
@@ -28,6 +29,7 @@ export default function RootLayout({
           <ToastProvider>
             <Theme accentColor="violet" grayColor="slate" radius="medium">
               {children}
+              <ErrorNotification />
             </Theme>
           </ToastProvider>
         </AuthProvider>

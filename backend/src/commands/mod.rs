@@ -196,6 +196,15 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
         Err(e) => {
             log::error!("Transcription failed: {}", e);
+            // Log error for UI notification
+            {
+                let mut error_log = state.error_log.lock().await;
+                error_log.log_error_with_details(
+                    crate::error_log::ErrorType::Transcription,
+                    "Voice transcription failed",
+                    e.clone()
+                );
+            }
             let mut is_processing = state.is_processing.lock().await;
             *is_processing = false;
             return Err(format!("Transcription failed: {}", e));
@@ -323,6 +332,15 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
         Err(e) => {
             log::warn!("LLM processing failed, defaulting to dictation: {}", e);
+            // Log error for UI notification (non-fatal - we fallback to dictation)
+            {
+                let mut error_log = state.error_log.lock().await;
+                error_log.log_error_with_details(
+                    crate::error_log::ErrorType::LLMProcessing,
+                    "AI processing failed, using dictation mode",
+                    e.clone()
+                );
+            }
             ActionResult {
                 action_type: ActionType::TypeText,
                 payload: serde_json::json!({}),
@@ -334,7 +352,26 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     };
 
     // Execute the action
-    let executed = execute_action_internal(&action, &state).await.is_ok();
+    let execute_result = execute_action_internal(&action, &state).await;
+    let executed = execute_result.is_ok();
+    
+    // Log execution errors
+    if let Err(ref e) = execute_result {
+        let mut error_log = state.error_log.lock().await;
+        error_log.log_error_with_details(
+            crate::error_log::ErrorType::ActionExecution,
+            format!("Failed to execute {:?}", action.action_type),
+            e.clone()
+        );
+    }
+    
+    // Track typed text for correction learning
+    if action.action_type == ActionType::TypeText {
+        if let Some(ref typed) = action.refined_text {
+            let mut tracker = state.correction_tracker.lock().await;
+            tracker.record_typed(transcription.text.clone(), typed.clone());
+        }
+    }
 
     // Update conversation with assistant response
     {

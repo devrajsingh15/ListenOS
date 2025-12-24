@@ -339,6 +339,41 @@ export async function deleteDictionaryWord(id: string): Promise<void> {
   return invoke("delete_dictionary_word", { id });
 }
 
+// ============ Error Log Types & Commands ============
+
+export type ErrorType = "Transcription" | "LLMProcessing" | "ActionExecution" | "AudioCapture" | "Network" | "RateLimit" | "Unknown";
+
+export interface ErrorEntry {
+  id: string;
+  error_type: ErrorType;
+  message: string;
+  details: string | null;
+  timestamp: string;
+  dismissed: boolean;
+}
+
+export async function getErrors(limit?: number): Promise<ErrorEntry[]> {
+  return invoke("get_errors", { limit });
+}
+
+export async function getUndismissedErrors(): Promise<ErrorEntry[]> {
+  return invoke("get_undismissed_errors");
+}
+
+export async function dismissError(id: string): Promise<boolean> {
+  return invoke("dismiss_error", { id });
+}
+
+export async function dismissAllErrors(): Promise<void> {
+  return invoke("dismiss_all_errors");
+}
+
+// ============ Correction Learning Commands ============
+
+export async function learnCorrection(correctedText: string): Promise<string[]> {
+  return invoke("learn_correction", { correctedText });
+}
+
 // ============ Utility ============
 
 export function isTauri(): boolean {

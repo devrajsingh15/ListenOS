@@ -18,6 +18,8 @@ mod notes;
 mod snippets;
 mod dictionary;
 mod rate_limit;
+mod correction;
+mod error_log;
 
 use tauri::{
     Emitter, Manager, AppHandle,
@@ -39,6 +41,8 @@ pub use integrations::{IntegrationManager, AppIntegration};
 pub use notes::{Note, NotesStore};
 pub use snippets::{Snippet, SnippetsStore};
 pub use dictionary::{DictionaryWord, DictionaryStore};
+pub use correction::CorrectionTracker;
+pub use error_log::{ErrorLog, ErrorEntry, ErrorType};
 
 /// Global application state
 pub struct AppState {
@@ -58,6 +62,10 @@ pub struct AppState {
     pub clipboard: Arc<Mutex<ClipboardService>>,
     // New: App integrations
     pub integrations: Arc<Mutex<IntegrationManager>>,
+    // Correction tracking for auto-learning
+    pub correction_tracker: Arc<Mutex<CorrectionTracker>>,
+    // Error logging
+    pub error_log: Arc<Mutex<ErrorLog>>,
 }
 
 impl Default for AppState {
@@ -87,6 +95,8 @@ impl Default for AppState {
             conversation_store: Arc::new(std::sync::Mutex::new(conversation_store)),
             clipboard: Arc::new(Mutex::new(ClipboardService::new())),
             integrations: Arc::new(Mutex::new(IntegrationManager::new())),
+            correction_tracker: Arc::new(Mutex::new(CorrectionTracker::new())),
+            error_log: Arc::new(Mutex::new(ErrorLog::new())),
         }
     }
 }
@@ -206,6 +216,13 @@ pub fn run() {
             add_dictionary_word,
             update_dictionary_word,
             delete_dictionary_word,
+            // Error Log
+            get_errors,
+            get_undismissed_errors,
+            dismiss_error,
+            dismiss_all_errors,
+            // Correction Learning
+            learn_correction,
         ])
         .setup(|app| {
             // Register global shortcut on startup
@@ -256,8 +273,9 @@ pub fn run() {
                 log::info!("Assistant window initialized (hidden, transparent, click-through)");
             }
 
-            // Start clipboard monitoring in background
+            // Start clipboard monitoring in background with auto-correction learning
             let clipboard_state = app.state::<AppState>().clipboard.clone();
+            let correction_tracker = app.state::<AppState>().correction_tracker.clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
                 loop {
@@ -265,10 +283,31 @@ pub fn run() {
                     let mut clipboard = clipboard_state.lock().await;
                     if let Some(entry) = clipboard.check_and_record() {
                         log::debug!("Clipboard captured: {} chars", entry.char_count);
+                        
+                        // Check for corrections (user typed something that differs from what we pasted)
+                        let content = entry.content.clone();
+                        drop(clipboard); // Release lock before acquiring another
+                        
+                        let mut tracker = correction_tracker.lock().await;
+                        let corrections = tracker.detect_corrections(&content);
+                        
+                        // Auto-learn any detected corrections
+                        if !corrections.is_empty() {
+                            if let Ok(store) = dictionary::DictionaryStore::new() {
+                                for (original, corrected) in corrections {
+                                    if store.word_exists(&corrected).unwrap_or(true) {
+                                        continue; // Skip if already in dictionary
+                                    }
+                                    if let Ok(_) = store.add_word(corrected.clone(), true) {
+                                        log::info!("Auto-learned word: {} (from correction of {})", corrected, original);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             });
-            log::info!("Clipboard monitoring started");
+            log::info!("Clipboard monitoring with auto-learning started");
 
             log::info!("ListenOS setup complete - dual-window architecture ready");
             Ok(())
@@ -443,6 +482,61 @@ async fn update_dictionary_word(id: String, word: String, phonetic: Option<Strin
 async fn delete_dictionary_word(id: String) -> Result<(), String> {
     let store = dictionary::DictionaryStore::new()?;
     store.delete_word(&id)
+}
+
+// ============ Error Log Commands ============
+
+#[tauri::command]
+async fn get_errors(state: tauri::State<'_, AppState>, limit: Option<usize>) -> Result<Vec<error_log::ErrorEntry>, String> {
+    let error_log = state.error_log.lock().await;
+    Ok(error_log.get_recent(limit.unwrap_or(20)))
+}
+
+#[tauri::command]
+async fn get_undismissed_errors(state: tauri::State<'_, AppState>) -> Result<Vec<error_log::ErrorEntry>, String> {
+    let error_log = state.error_log.lock().await;
+    Ok(error_log.get_undismissed())
+}
+
+#[tauri::command]
+async fn dismiss_error(state: tauri::State<'_, AppState>, id: String) -> Result<bool, String> {
+    let mut error_log = state.error_log.lock().await;
+    Ok(error_log.dismiss(&id))
+}
+
+#[tauri::command]
+async fn dismiss_all_errors(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut error_log = state.error_log.lock().await;
+    error_log.dismiss_all();
+    Ok(())
+}
+
+// ============ Correction Learning Commands ============
+
+/// Learn a correction from user's manual edit
+/// Call this when user types something different right after voice input
+#[tauri::command]
+async fn learn_correction(
+    state: tauri::State<'_, AppState>,
+    corrected_text: String
+) -> Result<Vec<String>, String> {
+    let mut tracker = state.correction_tracker.lock().await;
+    let corrections = tracker.detect_corrections(&corrected_text);
+    
+    // Auto-learn detected corrections to dictionary
+    let mut learned = Vec::new();
+    let store = dictionary::DictionaryStore::new()?;
+    
+    for (original, corrected) in corrections {
+        // Add the corrected word to dictionary (if not already there)
+        if !store.word_exists(&corrected)? {
+            store.add_word(corrected.clone(), true)?;
+            learned.push(corrected);
+            log::info!("Auto-learned word from correction: {} -> {}", original, learned.last().unwrap());
+        }
+    }
+    
+    Ok(learned)
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), tauri::Error> {
