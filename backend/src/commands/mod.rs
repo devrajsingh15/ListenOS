@@ -153,8 +153,14 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         (accumulator.get_samples().to_vec(), accumulator.sample_rate())
     };
 
+    // Calculate RMS to detect silence (to filter hallucinations)
+    let rms: f32 = if samples.is_empty() {
+        0.0
+    } else {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    };
     let duration_ms = (samples.len() as u64 * 1000) / sample_rate as u64;
-    log::info!("Captured {} samples ({} ms)", samples.len(), duration_ms);
+    log::info!("Audio captured: {} samples, {} ms, RMS: {:.4}", samples.len(), duration_ms, rms);
 
     if samples.is_empty() || samples.len() < 1600 { // Less than 100ms
         let mut is_processing = state.is_processing.lock().await;
@@ -169,10 +175,16 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     // Get context
     let context = state.current_context.lock().await.clone();
 
-    // Transcribe with Groq
+    // Load dictionary words for recognition hints
+    let dictionary_hints = match crate::dictionary::DictionaryStore::new() {
+        Ok(store) => store.get_words_for_recognition().unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+
+    // Transcribe with Groq (using dictionary hints)
     let client = GroqClient::new();
     
-    let transcription = match client.transcribe(&wav_data).await {
+    let transcription = match client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
         Ok(result) => {
             log::info!("Transcription: {}", result.text);
             TranscriptionResult {
@@ -190,10 +202,33 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     };
 
-    if transcription.text.trim().is_empty() {
+    // Detect silence at audio level - if RMS is extremely low, there was no real speech
+    // Threshold 0.001 catches digital silence while allowing quiet speech through
+    let is_silent = rms < 0.001;
+
+    if transcription.text.trim().is_empty() || is_silent {
+        log::info!("No speech detected (RMS: {:.4}, text: '{}')", rms, transcription.text);
         let mut is_processing = state.is_processing.lock().await;
         *is_processing = false;
-        return Err("No speech detected.".to_string());
+        
+        // Return a silent success (NoAction) so frontend just dismisses quietly
+        return Ok(VoiceProcessingResult {
+            transcription: TranscriptionResult {
+                text: String::new(),
+                duration_ms,
+                confidence: 0.0,
+                is_final: true,
+            },
+            action: ActionResultResponse {
+                action_type: "NoAction".to_string(),
+                payload: serde_json::json!({}),
+                refined_text: None,
+                response_text: None,
+            },
+            executed: true,
+            response_text: None,
+            session_id: "silent".to_string(),
+        });
     }
 
     // Get conversation context for multi-turn dialogues
@@ -209,6 +244,61 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
             clipboard.get_preview(200).ok()
         };
         
+        // Load custom commands for context
+        let custom_commands = match custom::CustomCommandsStore::new() {
+            Ok(store) => {
+                store.get_enabled_commands()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|c| (c.trigger_phrase, c.name, c.id))
+                    .collect()
+            }
+            Err(_) => Vec::new()
+        };
+        
+        // Load snippets for context
+        let snippets = match crate::snippets::SnippetsStore::new() {
+            Ok(store) => {
+                store.get_all_snippets()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|s| (s.trigger, s.expansion))
+                    .collect()
+            }
+            Err(_) => Vec::new()
+        };
+        
+        // Determine dictation style based on active app
+        let dictation_style = {
+            let config = state.config.lock().await;
+            let active_app = context.active_app.as_ref().map(|s| s.to_lowercase());
+            
+            let style_config = &config.dictation_style;
+            
+            // Detect app category based on name
+            let config_style = match active_app.as_deref() {
+                // Personal messengers
+                Some(app) if app.contains("whatsapp") || app.contains("messenger") || 
+                             app.contains("telegram") || app.contains("imessage") ||
+                             app.contains("signal") || app.contains("discord") => style_config.personal,
+                // Work apps
+                Some(app) if app.contains("slack") || app.contains("teams") || 
+                             app.contains("zoom") => style_config.work,
+                // Email
+                Some(app) if app.contains("mail") || app.contains("outlook") || 
+                             app.contains("gmail") || app.contains("thunderbird") => style_config.email,
+                // Default
+                _ => style_config.other,
+            };
+            
+            // Convert config style to cloud style
+            match config_style {
+                crate::config::DictationStyle::Formal => cloud::DictationStyle::Formal,
+                crate::config::DictationStyle::Casual => cloud::DictationStyle::Casual,
+                crate::config::DictationStyle::VeryCasual => cloud::DictationStyle::VeryCasual,
+            }
+        };
+        
         let ctx = ConversationContext {
             history: conversation.format_for_llm(),
             last_action: conversation.last_action.clone(),
@@ -217,6 +307,9 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
             user_facts: conversation.extracted_facts.iter()
                 .map(|f| format!("{}: {}", f.key, f.value))
                 .collect(),
+            custom_commands,
+            snippets,
+            dictation_style,
         };
         
         (ctx, conversation.session_id.clone())
@@ -376,12 +469,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
         }
         
         ActionType::CustomCommand => {
-            // TODO: Implement custom command execution
-            Ok(CommandResult {
-                success: false,
-                message: "Custom commands not yet implemented".to_string(),
-                output: None,
-            })
+            execute_custom_command(action, state).await
         }
 
         ActionType::TypeText => {
@@ -1003,6 +1091,100 @@ async fn execute_system_action(action: &ActionResult, state: &State<'_, AppState
     }
 }
 
+// ============ Custom Command Execution ============
+
+async fn execute_custom_command(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+    // Get command ID from payload
+    let command_id = action.payload.get("command_id")
+        .and_then(|v| v.as_str());
+    
+    let trigger_phrase = action.payload.get("trigger_phrase")
+        .and_then(|v| v.as_str());
+    
+    // Load custom commands store
+    let store = custom::CustomCommandsStore::new()?;
+    
+    // Find the command either by ID or trigger phrase
+    let command = if let Some(id) = command_id {
+        store.get_all_commands()?
+            .into_iter()
+            .find(|c| c.id == id && c.enabled)
+    } else if let Some(trigger) = trigger_phrase {
+        store.find_by_trigger(trigger)?
+    } else {
+        return Err("No command ID or trigger phrase provided".to_string());
+    };
+    
+    let command = match command {
+        Some(cmd) => cmd,
+        None => return Err("Custom command not found or disabled".to_string()),
+    };
+    
+    log::info!("Executing custom command: {} ({})", command.name, command.id);
+    
+    // Execute each action step in sequence
+    let mut success_count = 0;
+    let total_steps = command.actions.len();
+    
+    for (i, step) in command.actions.iter().enumerate() {
+        log::info!("Step {}/{}: {} - {:?}", i + 1, total_steps, step.action_type, step.payload);
+        
+        // Apply delay before step (except for first step)
+        if step.delay_ms > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(step.delay_ms as u64)).await;
+        }
+        
+        // Map action_type string to ActionType enum and execute
+        let step_action_type = match step.action_type.as_str() {
+            "open_app" => ActionType::OpenApp,
+            "open_url" => ActionType::OpenUrl,
+            "web_search" => ActionType::WebSearch,
+            "run_command" => ActionType::RunCommand,
+            "type_text" => ActionType::TypeText,
+            "volume_control" => ActionType::VolumeControl,
+            "spotify_control" => ActionType::SpotifyControl,
+            "discord_control" => ActionType::DiscordControl,
+            "system_control" => ActionType::SystemControl,
+            _ => {
+                log::warn!("Unknown action type in custom command: {}", step.action_type);
+                continue;
+            }
+        };
+        
+        let step_result = ActionResult {
+            action_type: step_action_type,
+            payload: step.payload.clone(),
+            refined_text: step.payload.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            response_text: None,
+            requires_confirmation: false,
+        };
+        
+        // Execute the step (recursively call execute_action_internal)
+        match Box::pin(execute_action_internal(&step_result, state)).await {
+            Ok(result) => {
+                if result.success {
+                    success_count += 1;
+                }
+                log::info!("Step {}/{} completed: {}", i + 1, total_steps, result.message);
+            }
+            Err(e) => {
+                log::warn!("Step {}/{} failed: {}", i + 1, total_steps, e);
+            }
+        }
+    }
+    
+    // Record usage
+    if let Err(e) = store.record_usage(&command.id) {
+        log::warn!("Failed to record command usage: {}", e);
+    }
+    
+    Ok(CommandResult {
+        success: success_count > 0,
+        message: format!("Executed '{}': {}/{} steps completed", command.name, success_count, total_steps),
+        output: None,
+    })
+}
+
 // ============ Conversation Commands ============
 
 /// Get conversation history
@@ -1131,18 +1313,22 @@ pub async fn set_config(
     
     // Check if hotkey changed
     if current_config.trigger_hotkey != config.trigger_hotkey {
-        let old_shortcut_str = &current_config.trigger_hotkey;
         let new_shortcut_str = &config.trigger_hotkey;
+        
+        log::info!("Updating hotkey from '{}' to '{}'", current_config.trigger_hotkey, new_shortcut_str);
 
-        // Unregister old
-        if let Ok(old_shortcut) = Shortcut::from_str(old_shortcut_str) {
-            let _ = app.global_shortcut().unregister(old_shortcut);
-        }
+        // Unregister all existing shortcuts to be safe
+        let _ = app.global_shortcut().unregister_all();
+        log::info!("Unregistered all previous shortcuts");
 
         // Register new
         if let Ok(new_shortcut) = Shortcut::from_str(new_shortcut_str) {
-            let _ = app.global_shortcut().register(new_shortcut);
-            log::info!("Re-registered shortcut: {}", new_shortcut_str);
+            match app.global_shortcut().register(new_shortcut) {
+                Ok(_) => log::info!("Successfully registered new shortcut: {}", new_shortcut_str),
+                Err(e) => log::error!("Failed to register new shortcut: {}", e),
+            }
+        } else {
+            log::error!("Failed to parse new shortcut string: {}", new_shortcut_str);
         }
     }
 

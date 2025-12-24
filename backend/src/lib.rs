@@ -17,6 +17,7 @@ mod integrations;
 mod notes;
 mod snippets;
 mod dictionary;
+mod rate_limit;
 
 use tauri::{
     Emitter, Manager, AppHandle,
@@ -191,6 +192,7 @@ pub fn run() {
             // Notes
             get_notes,
             create_note,
+            create_voice_note,
             update_note,
             delete_note,
             toggle_note_pin,
@@ -253,6 +255,20 @@ pub fn run() {
                 let _ = assistant.hide();
                 log::info!("Assistant window initialized (hidden, transparent, click-through)");
             }
+
+            // Start clipboard monitoring in background
+            let clipboard_state = app.state::<AppState>().clipboard.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+                loop {
+                    interval.tick().await;
+                    let mut clipboard = clipboard_state.lock().await;
+                    if let Some(entry) = clipboard.check_and_record() {
+                        log::debug!("Clipboard captured: {} chars", entry.char_count);
+                    }
+                }
+            });
+            log::info!("Clipboard monitoring started");
 
             log::info!("ListenOS setup complete - dual-window architecture ready");
             Ok(())
@@ -343,6 +359,38 @@ async fn delete_note(id: String) -> Result<(), String> {
 async fn toggle_note_pin(id: String) -> Result<bool, String> {
     let store = notes::NotesStore::new()?;
     store.toggle_pin(&id)
+}
+
+/// Create a note from voice - simplified flow that just transcribes and saves
+#[tauri::command]
+async fn create_voice_note(state: tauri::State<'_, AppState>) -> Result<notes::Note, String> {
+    use cloud::GroqClient;
+    
+    // Get accumulated audio
+    let (samples, sample_rate) = {
+        let accumulator = state.accumulator.lock().await;
+        (accumulator.get_samples().to_vec(), accumulator.sample_rate())
+    };
+
+    if samples.is_empty() || samples.len() < 1600 {
+        return Err("Recording too short".to_string());
+    }
+
+    // Encode to WAV
+    let wav_data = cloud::encode_wav(&samples, sample_rate)?;
+
+    // Transcribe with Groq (no intent processing)
+    let client = GroqClient::new();
+    let result = client.transcribe(&wav_data).await?;
+    
+    let text = result.text.trim();
+    if text.is_empty() {
+        return Err("No speech detected".to_string());
+    }
+
+    // Create and save the note
+    let store = notes::NotesStore::new()?;
+    store.create_note(text.to_string())
 }
 
 // ============ Snippets Commands ============

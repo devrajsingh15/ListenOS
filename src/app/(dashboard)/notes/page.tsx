@@ -6,12 +6,15 @@ import {
   isTauri,
   getNotes,
   createNote,
+  createVoiceNote,
   updateNote,
   deleteNote,
   toggleNotePin,
+  startListening,
   type Note,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/context/ToastContext";
 import { Mic01Icon, Search01Icon, Delete02Icon, Bookmark01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -22,6 +25,9 @@ export default function NotesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const { showError, showSuccess } = useToast();
 
   useEffect(() => {
     if (isTauri()) {
@@ -50,8 +56,9 @@ export default function NotesPage() {
       const note = await createNote(newNoteContent.trim());
       setNotes([note, ...notes]);
       setNewNoteContent("");
+      showSuccess("Note created");
     } catch (error) {
-      console.error("Failed to create note:", error);
+      showError(error);
     }
   };
 
@@ -88,6 +95,30 @@ export default function NotesPage() {
         }));
     } catch (error) {
       console.error("Failed to toggle pin:", error);
+    }
+  };
+
+  const handleVoiceNote = async () => {
+    if (isRecording) {
+      // Stop recording and create note
+      setIsRecording(false);
+      setIsProcessing(true);
+      try {
+        const note = await createVoiceNote();
+        setNotes([note, ...notes]);
+      } catch (error) {
+        showError(error);
+      } finally {
+        setIsProcessing(false);
+      }
+    } else {
+      // Start recording
+      try {
+        await startListening();
+        setIsRecording(true);
+      } catch (error) {
+        console.error("Failed to start recording:", error);
+      }
     }
   };
 
@@ -130,18 +161,35 @@ export default function NotesPage() {
               onKeyDown={(e) => e.key === "Enter" && handleCreateNote()}
               className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted focus:outline-none"
             />
-            <button 
-              onClick={handleCreateNote}
-              disabled={!newNoteContent.trim()}
-              className={cn(
-                "flex h-10 w-10 items-center justify-center rounded-full transition-colors",
-                newNoteContent.trim() 
-                  ? "bg-foreground text-white hover:bg-foreground/90"
-                  : "bg-muted/20 text-muted cursor-not-allowed"
-              )}
-            >
-              <HugeiconsIcon icon={Mic01Icon} size={20} />
-            </button>
+            {newNoteContent.trim() ? (
+              <button 
+                onClick={handleCreateNote}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-white transition-colors hover:bg-foreground/90"
+                title="Save note"
+              >
+                <HugeiconsIcon icon={Mic01Icon} size={20} />
+              </button>
+            ) : (
+              <button 
+                onClick={handleVoiceNote}
+                disabled={isProcessing}
+                className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-full transition-all",
+                  isRecording 
+                    ? "bg-red-500 text-white animate-pulse"
+                    : isProcessing
+                    ? "bg-muted/20 text-muted cursor-wait"
+                    : "bg-primary/10 text-primary hover:bg-primary/20"
+                )}
+                title={isRecording ? "Stop recording" : isProcessing ? "Processing..." : "Record voice note"}
+              >
+                {isProcessing ? (
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                ) : (
+                  <HugeiconsIcon icon={Mic01Icon} size={20} />
+                )}
+              </button>
+            )}
           </div>
         </div>
 

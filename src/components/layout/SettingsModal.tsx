@@ -165,6 +165,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 function SettingsContent({ section }: { section: SettingsSection }) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
+  const [currentShortcut, setCurrentShortcut] = useState("Ctrl+Space");
   const { user, subscription, settings, signIn, signOut, updateSettings, isAuthenticated } = useAuth();
 
   // Local state for system settings
@@ -241,6 +243,40 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     await updateSettings({ language: newLanguage });
   }, [updateSettings]);
 
+  const handleShortcutRecord = useCallback(() => {
+    setIsRecordingShortcut(true);
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      const keys: string[] = [];
+      if (e.ctrlKey) keys.push("Ctrl");
+      if (e.altKey) keys.push("Alt");
+      if (e.shiftKey) keys.push("Shift");
+      if (e.metaKey) keys.push("Win");
+      
+      // Add the actual key if it's not a modifier
+      if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+        keys.push(e.key === ' ' ? 'Space' : e.key.charAt(0).toUpperCase() + e.key.slice(1));
+      }
+      
+      if (keys.length >= 2) {
+        const shortcut = keys.join('+');
+        setCurrentShortcut(shortcut);
+        setIsRecordingShortcut(false);
+        updateSettings({ hotkey: shortcut });
+        document.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    
+    // Cancel after 5 seconds
+    setTimeout(() => {
+      setIsRecordingShortcut(false);
+      document.removeEventListener('keydown', handleKeyDown);
+    }, 5000);
+  }, [updateSettings]);
+
   switch (section) {
     case "general":
       return (
@@ -249,10 +285,18 @@ function SettingsContent({ section }: { section: SettingsSection }) {
           <div className="space-y-6">
             <SettingsRow
               label="Keyboard shortcuts"
-              description={settings?.hotkey || "Hold Ctrl + Space and speak."}
+              description={isRecordingShortcut ? "Press your shortcut..." : `Hold ${currentShortcut} and speak.`}
               action={
-                <button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">
-                  Change
+                <button 
+                  onClick={handleShortcutRecord}
+                  className={cn(
+                    "rounded-lg border px-4 py-2 text-sm font-medium transition-colors cursor-pointer",
+                    isRecordingShortcut 
+                      ? "border-primary bg-primary/10 text-primary animate-pulse" 
+                      : "border-border text-foreground hover:bg-sidebar-hover"
+                  )}
+                >
+                  {isRecordingShortcut ? "Recording..." : "Change"}
                 </button>
               }
             />

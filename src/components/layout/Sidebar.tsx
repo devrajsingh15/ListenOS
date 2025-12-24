@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { isTauri } from "@/lib/tauri";
 import { useAuth, SignedIn, SignedOut } from "@/context/AuthContext";
 import {
   Home03Icon,
@@ -68,24 +68,29 @@ interface SidebarProps {
 
 export function Sidebar({ onSettingsClick }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const handleNavigation = (href: string) => {
+    if (isTauri()) {
+      // In Tauri, use window.location for reliable navigation
+      window.location.href = href;
+    } else {
+      router.push(href);
+    }
+  };
 
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-border bg-sidebar-bg">
       {/* Logo */}
       <div className="flex items-center gap-2 px-5 py-5">
-        <div className="flex items-center gap-2">
-          <Image
-            src="/logo.svg"
-            alt="ListenOS Logo"
-            width={28}
-            height={28}
-            className="w-7 h-7"
-          />
-          <span className="text-lg font-semibold text-foreground">ListenOS</span>
-        </div>
-        <span className="ml-1 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-white">
-          Pro Trial
-        </span>
+        <Image
+          src="/logo.svg"
+          alt="ListenOS Logo"
+          width={28}
+          height={28}
+          className="w-7 h-7"
+        />
+        <span className="text-lg font-semibold text-foreground">ListenOS</span>
       </div>
 
       {/* Main Navigation */}
@@ -102,10 +107,10 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
                 const isActive = pathname === item.href;
                 return (
                   <li key={item.href}>
-                    <Link
-                      href={item.href}
+                    <button
+                      onClick={() => handleNavigation(item.href)}
                       className={cn(
-                        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-left cursor-pointer",
                         isActive
                           ? "bg-sidebar-active text-foreground"
                           : "text-muted hover:bg-sidebar-hover hover:text-foreground"
@@ -124,7 +129,7 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
                           NEW
                         </span>
                       )}
-                    </Link>
+                    </button>
                   </li>
                 );
               })}
@@ -137,13 +142,13 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
       <div className="border-t border-border px-3 py-3">
         <ul className="space-y-1">
           <li>
-            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground">
+            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer">
               <HugeiconsIcon icon={UserGroupIcon} size={18} />
               Invite your team
             </button>
           </li>
           <li>
-            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground">
+            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer">
               <HugeiconsIcon icon={GiftIcon} size={18} />
               Get a free month
             </button>
@@ -151,14 +156,14 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
           <li>
             <button
               onClick={onSettingsClick}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer"
             >
               <HugeiconsIcon icon={Settings02Icon} size={18} />
               Settings
             </button>
           </li>
           <li>
-            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground">
+            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer">
               <HugeiconsIcon icon={HelpCircleIcon} size={18} />
               Help
             </button>

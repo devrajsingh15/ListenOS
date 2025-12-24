@@ -14,13 +14,14 @@ import {
 type AssistantState = "idle" | "listening" | "processing" | "success" | "error";
 
 export default function AssistantPage() {
-  const [state, setState] = useState<AssistantState>("idle");
+  const [state, setState] = useState<AssistantState>("listening");
   const [mounted, setMounted] = useState(false);
 
-  const stateRef = useRef<AssistantState>("idle");
+  const stateRef = useRef<AssistantState>("listening");
 
   useEffect(() => {
-    setMounted(true);
+    // Intentional: set mounted state on component mount for hydration
+    setMounted(true); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
 
   useEffect(() => {
@@ -41,7 +42,13 @@ export default function AssistantPage() {
     if (stateRef.current !== "listening") return;
     setState("processing");
     try {
-      await stopListening();
+      const result = await stopListening();
+      // If no input detected, silently dismiss without any animation
+      if (result.action?.action_type === "NoAction") {
+        setState("idle");
+        if (isTauri()) hideAssistant().catch(() => {});
+        return;
+      }
       setState("success");
       setTimeout(() => {
         if (isTauri()) hideAssistant().catch(() => {});
@@ -88,178 +95,130 @@ export default function AssistantPage() {
       className="h-full w-full flex items-center justify-center"
       style={{ background: "transparent" }}
     >
+      <div className="relative flex items-center justify-center w-full h-full">
       <AnimatePresence mode="wait">
         {state === "listening" && <ListeningAnimation key="listening" />}
         {state === "processing" && <ProcessingAnimation key="processing" />}
         {state === "success" && <SuccessAnimation key="success" />}
         {state === "error" && <ErrorAnimation key="error" />}
       </AnimatePresence>
+      </div>
     </div>
   );
 }
 
-// Listening: Animated waveform bars with rainbow gradient
-function ListeningAnimation() {
+// Idle: Pulsing pill
+function IdleAnimation() {
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.8 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.9 }}
-      transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      className="flex items-center gap-1 h-8"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="flex items-center gap-2"
     >
-      {[...Array(12)].map((_, i) => {
-        const hue = (i * 30) % 360;
-        return (
+      <div className="flex gap-1">
+        {[...Array(3)].map((_, i) => (
           <motion.div
             key={i}
-            className="w-1.5 rounded-full"
-            style={{
-              background: `linear-gradient(to top, hsl(${hue}, 100%, 60%), hsl(${(hue + 60) % 360}, 100%, 70%))`,
-              boxShadow: `0 0 8px hsl(${hue}, 100%, 50%)`,
-            }}
-            animate={{
-              height: ["20%", `${40 + Math.random() * 60}%`, "20%"],
-              opacity: [0.7, 1, 0.7],
-            }}
+            className="w-1.5 h-1.5 rounded-full bg-white/50 keep-bg"
+            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
             transition={{
-              duration: 0.3 + Math.random() * 0.2,
+              duration: 1.5,
               repeat: Infinity,
+              delay: i * 0.2,
               ease: "easeInOut",
-              delay: i * 0.04,
             }}
           />
-        );
-      })}
+        ))}
+      </div>
     </motion.div>
   );
 }
 
-// Processing: Spinning gradient ring
+// Listening: Voice Waveform
+function ListeningAnimation() {
+  const bars = 20;
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="flex items-center gap-1 h-8"
+    >
+      {[...Array(bars)].map((_, i) => (
+        <motion.div
+          key={i}
+          className="w-1.5 rounded-full bg-gradient-to-t from-blue-500 to-purple-500 keep-bg"
+          animate={{
+            height: [8, Math.random() * 24 + 8, 8],
+          }}
+          transition={{
+            duration: 0.5,
+            repeat: Infinity,
+            repeatType: "reverse",
+            delay: i * 0.05,
+            ease: "easeInOut",
+          }}
+        />
+      ))}
+    </motion.div>
+  );
+}
+
+// Processing: Spinning Galaxy Ring
 function ProcessingAnimation() {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.5 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.8 }}
-      transition={{ type: "spring", stiffness: 400, damping: 20 }}
+      exit={{ opacity: 0, scale: 0.5 }}
       className="relative w-8 h-8"
     >
       {/* Outer spinning ring */}
       <motion.div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: "conic-gradient(from 0deg, #8b5cf6, #3b82f6, #06b6d4, #10b981, #8b5cf6)",
-          padding: "3px",
-        }}
+        className="absolute inset-0 rounded-full border-2 border-transparent border-t-blue-500 border-r-purple-500 keep-bg"
         animate={{ rotate: 360 }}
-        transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
-      >
-        <div
-          className="w-full h-full rounded-full"
-          style={{ background: "transparent" }}
-        />
-      </motion.div>
-      
-      {/* Glow effect */}
-      <motion.div
-        className="absolute inset-0 rounded-full"
-        animate={{
-          boxShadow: [
-            "0 0 15px rgba(139, 92, 246, 0.5)",
-            "0 0 25px rgba(59, 130, 246, 0.6)",
-            "0 0 15px rgba(139, 92, 246, 0.5)",
-          ],
-        }}
-        transition={{ duration: 1, repeat: Infinity }}
+        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
       />
+      {/* Inner spinning ring (reverse) */}
+      <motion.div
+        className="absolute inset-1 rounded-full border-2 border-transparent border-b-blue-400 border-l-purple-400 keep-bg"
+        animate={{ rotate: -360 }}
+        transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+      />
+      {/* Core glow */}
+      <div className="absolute inset-0 m-auto w-2 h-2 rounded-full bg-white/80 blur-sm keep-bg" />
     </motion.div>
   );
 }
 
-// Success: Green pulsing circle with checkmark animation
+// Success: Simple Check (no text)
 function SuccessAnimation() {
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0 }}
+      initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.5 }}
-      transition={{ type: "spring", stiffness: 500, damping: 15 }}
-      className="relative w-8 h-8"
+      exit={{ opacity: 0, scale: 0.8 }}
+      className="flex items-center justify-center text-green-400"
     >
-      {/* Green circle */}
-      <motion.div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
-          boxShadow: "0 0 20px rgba(34, 197, 94, 0.6)",
-        }}
-        animate={{
-          boxShadow: [
-            "0 0 20px rgba(34, 197, 94, 0.6)",
-            "0 0 30px rgba(34, 197, 94, 0.8)",
-            "0 0 20px rgba(34, 197, 94, 0.6)",
-          ],
-        }}
-        transition={{ duration: 0.5, repeat: 1 }}
-      />
-      
-      {/* Checkmark */}
-      <svg
-        className="absolute inset-0 w-full h-full p-1.5"
-        fill="none"
-        stroke="white"
-        viewBox="0 0 24 24"
-      >
-        <motion.path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={3}
-          d="M5 13l4 4L19 7"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.25, ease: "easeOut" }}
-        />
+      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
       </svg>
     </motion.div>
   );
 }
 
-// Error: Red pulsing X
+// Error: Simple X (no text)
 function ErrorAnimation() {
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0 }}
+      initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.5 }}
-      transition={{ type: "spring", stiffness: 500, damping: 15 }}
-      className="relative w-8 h-8"
+      exit={{ opacity: 0, scale: 0.8 }}
+      className="flex items-center justify-center text-red-400"
     >
-      {/* Red circle */}
-      <motion.div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
-          boxShadow: "0 0 20px rgba(239, 68, 68, 0.6)",
-        }}
-      />
-      
-      {/* X mark */}
-      <svg
-        className="absolute inset-0 w-full h-full p-2"
-        fill="none"
-        stroke="white"
-        viewBox="0 0 24 24"
-      >
-        <motion.path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={3}
-          d="M6 18L18 6M6 6l12 12"
-          initial={{ pathLength: 0 }}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.2, ease: "easeOut" }}
-        />
+      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
       </svg>
     </motion.div>
   );

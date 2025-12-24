@@ -109,7 +109,7 @@ export class TranscriptionWebSocket {
           }
         };
 
-        this.ws.onerror = (event) => {
+        this.ws.onerror = () => {
           this.onError(new Error("WebSocket error"));
           reject(new Error("WebSocket connection failed"));
         };

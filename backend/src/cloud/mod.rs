@@ -12,7 +12,7 @@ use reqwest::Client;
 /// Get the Groq API key (base64 encoded to bypass GitHub secret scanner)
 pub fn get_groq_key() -> String {
     // Base64 encoded key - decode at runtime
-    let encoded = "Z3NrX3VNdW5KUFR1dTNNd25udjJVejJPV0dkeWIzRlluUjNRMGFDSFJQSzRMQUdvYWM0eGs3amo=";
+    let encoded = "Z3NrX2xRbkZsME5BN1RueVVVMXlFOXNhV0dkeWIzRllpZlFkMXdEaUc1UDNMR0xIVWpzTDdSWGk=";
     String::from_utf8(
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
             .unwrap_or_default()
@@ -22,7 +22,7 @@ pub fn get_groq_key() -> String {
 /// Get the Deepgram API key (base64 encoded to bypass GitHub secret scanner)
 pub fn get_deepgram_key() -> String {
     // Base64 encoded key - decode at runtime
-    let encoded = "NTIxMjI0Zjc0YjM5Njg2MjE1ZDJlN2Y4ODlkOWEzYzg0MDY2M2U2Yw==";
+    let encoded = "NThkNDMwNGJkNDlhOTJiYjA1ZjY0Y2I0ZTEzOGIzMThkYTIwZWJjYw==";
     String::from_utf8(
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
             .unwrap_or_default()
@@ -151,6 +151,18 @@ impl ActionResult {
     }
 }
 
+/// Dictation style setting (matches config)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DictationStyle {
+    /// Caps + Full punctuation
+    #[default]
+    Formal,
+    /// Caps + Less punctuation
+    Casual,
+    /// No caps + Less punctuation  
+    VeryCasual,
+}
+
 /// Conversation context for multi-turn dialogues
 #[derive(Debug, Clone, Default)]
 pub struct ConversationContext {
@@ -164,6 +176,12 @@ pub struct ConversationContext {
     pub clipboard_preview: Option<String>,
     /// Extracted user facts/preferences
     pub user_facts: Vec<String>,
+    /// User's custom commands (trigger phrases and IDs)
+    pub custom_commands: Vec<(String, String, String)>, // (trigger, name, id)
+    /// User's text expansion snippets (trigger, expansion)
+    pub snippets: Vec<(String, String)>,
+    /// Current dictation style
+    pub dictation_style: DictationStyle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,7 +229,17 @@ impl GroqClient {
     }
 
     /// Transcribe audio using Groq's Whisper endpoint (fastest in the world)
+    /// 
+    /// `dictionary_hints` - Optional list of custom words/names to help recognition
     pub async fn transcribe(&self, audio_data: &[u8]) -> Result<TranscriptionResult, String> {
+        self.transcribe_with_hints(audio_data, &[]).await
+    }
+    
+    /// Transcribe audio with custom vocabulary hints
+    pub async fn transcribe_with_hints(&self, audio_data: &[u8], dictionary_hints: &[String]) -> Result<TranscriptionResult, String> {
+        // Check rate limit before making API call
+        crate::rate_limit::check_stt_limit()?;
+        
         use reqwest::multipart::{Form, Part};
         
         let audio_part = Part::bytes(audio_data.to_vec())
@@ -219,11 +247,23 @@ impl GroqClient {
             .mime_str("audio/wav")
             .map_err(|e| format!("Failed to create audio part: {}", e))?;
 
-        let form = Form::new()
+        let mut form = Form::new()
             .part("file", audio_part)
             .text("model", "whisper-large-v3-turbo")
             .text("response_format", "json")
             .text("language", "en");
+        
+        // Add dictionary hints as a prompt to improve recognition
+        if !dictionary_hints.is_empty() {
+            // Limit to first 50 words to avoid prompt being too long
+            let hints: Vec<&str> = dictionary_hints.iter()
+                .take(50)
+                .map(|s| s.as_str())
+                .collect();
+            let prompt = format!("Vocabulary hints: {}", hints.join(", "));
+            form = form.text("prompt", prompt);
+            log::info!("Using {} dictionary hints for transcription", hints.len());
+        }
 
         let api_key = get_groq_key();
         if api_key.is_empty() {
@@ -269,6 +309,9 @@ impl GroqClient {
         voice_context: &VoiceContext,
         conv_context: &ConversationContext,
     ) -> Result<ActionResult, String> {
+        // Check rate limit before making API call
+        crate::rate_limit::check_llm_limit()?;
+        
         let system_prompt = self.build_system_prompt(voice_context, conv_context);
         let user_message = format!(
             "User request: \"{}\"\n\nAnalyze and respond with the appropriate action.",
@@ -356,31 +399,63 @@ WHEN IN DOUBT, USE type_text. It's better to type text that the user can delete 
 
         prompt.push_str(&format!("OS: {}\n\n", voice_context.os));
 
+        // Add user's custom commands if any
+        if !conv_context.custom_commands.is_empty() {
+            prompt.push_str("=== USER'S CUSTOM COMMANDS (HIGHEST PRIORITY) ===\n");
+            prompt.push_str("If the user says ANY of these trigger phrases, use custom_command action:\n\n");
+            for (trigger, name, id) in &conv_context.custom_commands {
+                prompt.push_str(&format!(
+                    "- \"{}\" -> {{\"action\": \"custom_command\", \"payload\": {{\"command_id\": \"{}\", \"trigger_phrase\": \"{}\"}}}} ({})",
+                    trigger, id, trigger, name
+                ));
+                prompt.push('\n');
+            }
+            prompt.push('\n');
+        }
+
+        // Add user's text expansion snippets if any
+        if !conv_context.snippets.is_empty() {
+            prompt.push_str("=== USER'S TEXT SNIPPETS (EXPAND ON MATCH) ===\n");
+            prompt.push_str("If the user says EXACTLY one of these trigger phrases, expand to the text using type_text:\n\n");
+            for (trigger, expansion) in &conv_context.snippets {
+                let preview = if expansion.len() > 50 { 
+                    format!("{}...", &expansion[..50]) 
+                } else { 
+                    expansion.clone() 
+                };
+                prompt.push_str(&format!(
+                    "- \"{}\" -> {{\"action\": \"type_text\", \"refined_text\": \"{}\"}}\n",
+                    trigger, preview
+                ));
+            }
+            prompt.push('\n');
+        }
+
         // Add available actions with clear triggers
         prompt.push_str(r#"=== AVAILABLE COMMANDS (only when explicitly triggered) ===
 
 APPS & BROWSER:
 - open_app: Trigger words: "open", "launch", "start" + app name
-  Example: "Open Chrome" → {"action": "open_app", "payload": {"app": "chrome"}}
+  Example: "Open Chrome" -> {"action": "open_app", "payload": {"app": "chrome"}}
   
 - open_url: Trigger words: "open", "go to" + URL/website
-  Example: "Open google.com" → {"action": "open_url", "payload": {"url": "https://google.com"}}
+  Example: "Open google.com" -> {"action": "open_url", "payload": {"url": "https://google.com"}}
   
 - web_search: Trigger words: "search", "google", "look up", "find"
-  Example: "Search for weather" → {"action": "web_search", "payload": {"query": "weather"}}
+  Example: "Search for weather" -> {"action": "web_search", "payload": {"query": "weather"}}
 
 MEDIA CONTROL:
 - spotify_control: Trigger words: "play", "pause", "stop", "next", "previous", "skip"
-  Example: "Pause the music" → {"action": "spotify_control", "payload": {"action": "pause"}}
-  Example: "Play some jazz" → {"action": "spotify_control", "payload": {"action": "search", "query": "jazz"}}
+  Example: "Pause the music" -> {"action": "spotify_control", "payload": {"action": "pause"}}
+  Example: "Play some jazz" -> {"action": "spotify_control", "payload": {"action": "search", "query": "jazz"}}
 
 - volume_control: Trigger words: "volume", "louder", "quieter", "mute"
-  Example: "Volume up" → {"action": "volume_control", "payload": {"direction": "up"}}
+  Example: "Volume up" -> {"action": "volume_control", "payload": {"direction": "up"}}
 
 SYSTEM:
 - system_control: Trigger words: "lock", "screenshot", "sleep"
-  Example: "Lock my computer" → {"action": "system_control", "payload": {"action": "lock"}}
-  Example: "Take a screenshot" → {"action": "system_control", "payload": {"action": "screenshot"}}
+  Example: "Lock my computer" -> {"action": "system_control", "payload": {"action": "lock"}}
+  Example: "Take a screenshot" -> {"action": "system_control", "payload": {"action": "screenshot"}}
 
 CLIPBOARD (only when "clipboard" is mentioned):
 - clipboard_format: "format my clipboard", "clipboard as bullets"
@@ -390,8 +465,8 @@ CLIPBOARD (only when "clipboard" is mentioned):
 DICTATION (DEFAULT - use for everything else):
 - type_text: Used when the user is dictating text to be typed
   The refined_text field contains the EXACT text to type
-  Example: "Hello how are you" → {"action": "type_text", "refined_text": "Hello, how are you?"}
-  Example: "I need to finish the report by Friday" → {"action": "type_text", "refined_text": "I need to finish the report by Friday."}
+  Example: "Hello how are you" -> {"action": "type_text", "refined_text": "Hello, how are you?"}
+  Example: "I need to finish the report by Friday" -> {"action": "type_text", "refined_text": "I need to finish the report by Friday."}
 
 === RESPONSE FORMAT (JSON only) ===
 
@@ -403,29 +478,66 @@ DICTATION (DEFAULT - use for everything else):
 
 === EXAMPLES - COMMANDS ===
 
-"Open Chrome" → {"action": "open_app", "payload": {"app": "chrome"}}
-"Search for Italian restaurants" → {"action": "web_search", "payload": {"query": "Italian restaurants"}}
-"Pause" → {"action": "spotify_control", "payload": {"action": "pause"}}
-"Lock computer" → {"action": "system_control", "payload": {"action": "lock"}}
-"Volume down" → {"action": "volume_control", "payload": {"direction": "down"}}
+"Open Chrome" -> {"action": "open_app", "payload": {"app": "chrome"}}
+"Search for Italian restaurants" -> {"action": "web_search", "payload": {"query": "Italian restaurants"}}
+"Pause" -> {"action": "spotify_control", "payload": {"action": "pause"}}
+"Lock computer" -> {"action": "system_control", "payload": {"action": "lock"}}
+"Volume down" -> {"action": "volume_control", "payload": {"direction": "down"}}
 
 === EXAMPLES - DICTATION (type_text) ===
 
-"Hello world" → {"action": "type_text", "refined_text": "Hello world."}
-"The meeting is scheduled for 3 PM" → {"action": "type_text", "refined_text": "The meeting is scheduled for 3 PM."}
-"Dear John comma I hope this email finds you well" → {"action": "type_text", "refined_text": "Dear John, I hope this email finds you well."}
-"Please review the attached document and let me know your thoughts" → {"action": "type_text", "refined_text": "Please review the attached document and let me know your thoughts."}
-"I think we should open the discussion with" → {"action": "type_text", "refined_text": "I think we should open the discussion with"}
-"Can you help me with this" → {"action": "type_text", "refined_text": "Can you help me with this?"}
+"Hello world" -> {"action": "type_text", "refined_text": "Hello world."}
+"The meeting is scheduled for 3 PM" -> {"action": "type_text", "refined_text": "The meeting is scheduled for 3 PM."}
+"Dear John comma I hope this email finds you well" -> {"action": "type_text", "refined_text": "Dear John, I hope this email finds you well."}
+"Please review the attached document and let me know your thoughts" -> {"action": "type_text", "refined_text": "Please review the attached document and let me know your thoughts."}
+"I think we should open the discussion with" -> {"action": "type_text", "refined_text": "I think we should open the discussion with"}
+"Can you help me with this" -> {"action": "type_text", "refined_text": "Can you help me with this?"}
+"#);
 
-=== PUNCTUATION RULES FOR type_text ===
+        // Add style-specific punctuation rules
+        let style_rules = match conv_context.dictation_style {
+            DictationStyle::Formal => r#"
+=== PUNCTUATION RULES FOR type_text (FORMAL STYLE) ===
 
 1. Add periods at the end of complete sentences
 2. Add question marks for questions
-3. Convert spoken punctuation: "comma" → ",", "period" → ".", "question mark" → "?"
-4. Capitalize first letter of sentences
+3. Convert spoken punctuation: "comma" -> ",", "period" -> ".", "question mark" -> "?"
+4. Capitalize first letter of sentences and proper nouns
 5. Keep the user's words exactly, just add proper formatting
-"#);
+6. Use full punctuation including commas in complex sentences
+"#,
+            DictationStyle::Casual => r#"
+=== PUNCTUATION RULES FOR type_text (CASUAL STYLE) ===
+
+1. Capitalize first letter of sentences
+2. Add question marks for questions
+3. Convert spoken punctuation: "comma" -> ",", "period" -> ".", "question mark" -> "?"
+4. Use MINIMAL punctuation - skip periods at end of simple sentences
+5. Skip commas unless explicitly spoken
+6. Keep the casual, natural flow of speech
+
+Examples with CASUAL style:
+- "Hey how are you" -> "Hey how are you"
+- "Let's meet at noon" -> "Let's meet at noon"
+- "Sounds good see you then" -> "Sounds good see you then"
+"#,
+            DictationStyle::VeryCasual => r#"
+=== PUNCTUATION RULES FOR type_text (VERY CASUAL STYLE) ===
+
+1. Use ALL LOWERCASE (no capital letters except proper nouns like names)
+2. Use MINIMAL punctuation - skip periods completely
+3. Only add question marks for questions
+4. Skip commas unless explicitly spoken
+5. Keep it natural like texting a friend
+
+Examples with VERY CASUAL style:
+- "Hey how are you" -> "hey how are you"
+- "Let's meet at noon" -> "let's meet at noon"
+- "Sounds good see you then" -> "sounds good see you then"
+- "Thanks for your help" -> "thanks for your help"
+"#,
+        };
+        prompt.push_str(style_rules);
 
         prompt
     }

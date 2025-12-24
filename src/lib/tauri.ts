@@ -279,6 +279,10 @@ export async function toggleNotePin(id: string): Promise<boolean> {
   return invoke("toggle_note_pin", { id });
 }
 
+export async function createVoiceNote(): Promise<Note> {
+  return invoke("create_voice_note");
+}
+
 // ============ Snippets Types & Commands ============
 
 export interface Snippet {

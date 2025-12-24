@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Theme } from "@radix-ui/themes";
 import { AuthProvider } from "@/context/AuthContext";
+import { ToastProvider } from "@/context/ToastContext";
 import "../globals.css";
 
 const inter = Inter({
@@ -24,9 +25,11 @@ export default function RootLayout({
     <html lang="en" className={inter.variable}>
       <body className="antialiased">
         <AuthProvider>
-          <Theme accentColor="violet" grayColor="slate" radius="medium">
-            {children}
-          </Theme>
+          <ToastProvider>
+            <Theme accentColor="violet" grayColor="slate" radius="medium">
+              {children}
+            </Theme>
+          </ToastProvider>
         </AuthProvider>
       </body>
     </html>

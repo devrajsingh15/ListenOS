@@ -31,15 +31,15 @@ export function VoiceOverlay({
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Clear hide timeout
-  const clearHideTimeout = () => {
+  const clearHideTimeout = useCallback(() => {
     if (hideTimeoutRef.current) {
       clearTimeout(hideTimeoutRef.current);
       hideTimeoutRef.current = null;
     }
-  };
+  }, []);
 
   // Schedule hide
-  const scheduleHide = (delay: number) => {
+  const scheduleHide = useCallback((delay: number) => {
     clearHideTimeout();
     hideTimeoutRef.current = setTimeout(() => {
       setState("idle");
@@ -48,7 +48,7 @@ export function VoiceOverlay({
       setActionType("");
       setShowQuickActions(false);
     }, delay);
-  };
+  }, [clearHideTimeout]);
 
   // Start listening - backend handles native audio capture
   const handleStartListening = useCallback(async () => {
@@ -77,7 +77,7 @@ export function VoiceOverlay({
       setStatusText("Failed to start");
       scheduleHide(2000);
     }
-  }, []);
+  }, [clearHideTimeout, scheduleHide]);
 
   // Stop listening - backend processes audio and executes action
   const handleStopListening = useCallback(async () => {
@@ -129,6 +129,11 @@ export function VoiceOverlay({
           setState("error");
           scheduleHide(2500);
         }
+      } else if (result.action.action_type === "NoAction") {
+        // Silent dismissal for filtered hallucinations
+        console.log("[VoiceOverlay] Silent dismissal (NoAction)");
+        setState("idle");
+        scheduleHide(0);
       } else {
         setState("error");
         setStatusText("No speech detected");
@@ -140,7 +145,7 @@ export function VoiceOverlay({
       setStatusText("Error processing");
       scheduleHide(2000);
     }
-  }, [onTranscriptionComplete]);
+  }, [onTranscriptionComplete, scheduleHide]);
 
   // Set up Tauri event listeners for global shortcut
   useEffect(() => {
@@ -172,7 +177,7 @@ export function VoiceOverlay({
       unlistenReleased?.();
       clearHideTimeout();
     };
-  }, [handleStartListening, handleStopListening]);
+  }, [handleStartListening, handleStopListening, clearHideTimeout]);
 
   // Show overlay when not idle
   const showOverlay = state !== "idle";

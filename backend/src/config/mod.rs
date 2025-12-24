@@ -35,6 +35,44 @@ pub struct AppConfig {
     
     /// Auto-start on system boot
     pub auto_start: bool,
+    
+    /// Dictation style settings per context
+    pub dictation_style: DictationStyleConfig,
+}
+
+/// Dictation style configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DictationStyleConfig {
+    /// Style for personal messages (messengers)
+    pub personal: DictationStyle,
+    /// Style for work messages (Slack, Teams)
+    pub work: DictationStyle,
+    /// Style for email
+    pub email: DictationStyle,
+    /// Style for other contexts
+    pub other: DictationStyle,
+}
+
+impl Default for DictationStyleConfig {
+    fn default() -> Self {
+        Self {
+            personal: DictationStyle::Casual,
+            work: DictationStyle::Formal,
+            email: DictationStyle::Formal,
+            other: DictationStyle::Formal,
+        }
+    }
+}
+
+/// Dictation style affects capitalization and punctuation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DictationStyle {
+    /// Caps + Full punctuation
+    Formal,
+    /// Caps + Less punctuation
+    Casual,
+    /// No caps + Less punctuation  
+    VeryCasual,
 }
 
 impl Default for AppConfig {
@@ -50,6 +88,7 @@ impl Default for AppConfig {
             ui: UIConfig::default(),
             sound_feedback: true,
             auto_start: false,
+            dictation_style: DictationStyleConfig::default(),
         }
     }
 }

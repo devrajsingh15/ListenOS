@@ -10,10 +10,12 @@ import {
   type ConversationMessage,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/context/ToastContext";
 
 export default function ConversationPage() {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { showSuccess } = useToast();
 
   useEffect(() => {
     if (isTauri()) {
@@ -53,44 +55,48 @@ export default function ConversationPage() {
     }
   };
 
+  const handleCopy = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      showSuccess("Copied to clipboard");
+    } catch {
+      console.error("Failed to copy");
+    }
+  };
+
   const formatTime = (timestamp: string) => {
     try {
       const date = new Date(timestamp);
-      return date.toLocaleString();
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } catch {
       return "";
     }
   };
 
-  const getActionIcon = (actionTaken: string | null, success: boolean | null) => {
-    if (!actionTaken) return null;
-
-    const isSuccess = success === true;
-    const isFailed = success === false;
-
-    return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-          isSuccess && "bg-green-500/20 text-green-400",
-          isFailed && "bg-red-500/20 text-red-400",
-          !isSuccess && !isFailed && "bg-blue-500/20 text-blue-400"
-        )}
-      >
-        {isSuccess && (
-          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-        )}
-        {isFailed && (
-          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        )}
-        {actionTaken}
-      </span>
-    );
+  const formatDate = (timestamp: string) => {
+    try {
+      const date = new Date(timestamp);
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      if (date.toDateString() === today.toDateString()) return "TODAY";
+      if (date.toDateString() === yesterday.toDateString()) return "YESTERDAY";
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase();
+    } catch {
+      return "";
+    }
   };
+
+  // Filter to only user messages (what was actually said) and group by date
+  const userMessages = messages.filter(m => m.role === "User");
+  const groupedMessages = userMessages.reduce((groups, msg) => {
+    const dateKey = formatDate(msg.timestamp);
+    if (!groups[dateKey]) groups[dateKey] = [];
+    groups[dateKey].push(msg);
+    return groups;
+  }, {} as Record<string, ConversationMessage[]>);
+
 
   return (
     <AppShell>
@@ -125,82 +131,52 @@ export default function ConversationPage() {
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="rounded-xl border border-border bg-card p-4">
-            <p className="text-sm text-muted">Total Messages</p>
-            <p className="text-2xl font-bold text-foreground">{messages.length}</p>
+        {/* Messages List - Clean Flow-style */}
+        {isLoading ? (
+          <div className="flex h-64 items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
-          <div className="rounded-xl border border-border bg-card p-4">
-            <p className="text-sm text-muted">User Messages</p>
-            <p className="text-2xl font-bold text-foreground">
-              {messages.filter((m) => m.role === "User").length}
+        ) : userMessages.length === 0 ? (
+          <div className="flex h-64 flex-col items-center justify-center text-center">
+            <div className="mb-4 rounded-full bg-primary/10 p-4">
+              <svg className="h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </div>
+            <h3 className="mb-1 font-medium text-foreground">No conversation history</h3>
+            <p className="text-sm text-muted">
+              Start speaking with ListenOS to see your conversation here
             </p>
           </div>
-          <div className="rounded-xl border border-border bg-card p-4">
-            <p className="text-sm text-muted">AI Responses</p>
-            <p className="text-2xl font-bold text-foreground">
-              {messages.filter((m) => m.role === "Assistant").length}
-            </p>
-          </div>
-        </div>
-
-        {/* Messages List */}
-        <div className="rounded-xl border border-border bg-card">
-          {isLoading ? (
-            <div className="flex h-64 items-center justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="flex h-64 flex-col items-center justify-center text-center">
-              <div className="mb-4 rounded-full bg-primary/10 p-4">
-                <svg className="h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-              </div>
-              <h3 className="mb-1 font-medium text-foreground">No conversation history</h3>
-              <p className="text-sm text-muted">
-                Start speaking with ListenOS to see your conversation here
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={cn(
-                    "flex gap-4 p-4",
-                    msg.role === "User" && "bg-background/50"
-                  )}
-                >
-                  {/* Avatar */}
-                  <div
-                    className={cn(
-                      "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-medium",
-                      msg.role === "User" && "bg-primary text-white",
-                      msg.role === "Assistant" && "bg-green-500/20 text-green-400",
-                      msg.role === "System" && "bg-gray-500/20 text-gray-400"
-                    )}
-                  >
-                    {msg.role === "User" ? "You" : msg.role === "Assistant" ? "AI" : "Sys"}
-                  </div>
-
-                  {/* Content */}
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground">
-                        {msg.role === "User" ? "You" : msg.role === "Assistant" ? "ListenOS" : "System"}
+        ) : (
+          <div className="space-y-6">
+            {Object.entries(groupedMessages).map(([dateKey, msgs]) => (
+              <div key={dateKey}>
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
+                  {dateKey}
+                </h3>
+                <div className="rounded-lg border border-border bg-card overflow-hidden">
+                  {msgs.map((msg, idx) => (
+                    <div
+                      key={msg.id}
+                      onClick={() => handleCopy(msg.content)}
+                      className={cn(
+                        "flex gap-6 px-5 py-3 cursor-pointer transition-colors hover:bg-sidebar-hover",
+                        idx !== msgs.length - 1 && "border-b border-border"
+                      )}
+                      title="Click to copy"
+                    >
+                      <span className="w-20 shrink-0 text-sm text-muted">
+                        {formatTime(msg.timestamp)}
                       </span>
-                      <span className="text-xs text-muted">{formatTime(msg.timestamp)}</span>
-                      {getActionIcon(msg.action_taken, msg.action_success)}
+                      <p className="text-sm text-foreground">{msg.content}</p>
                     </div>
-                    <p className="mt-1 text-sm text-foreground/80">{msg.content}</p>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </AppShell>
   );
