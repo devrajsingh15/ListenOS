@@ -363,7 +363,7 @@ impl GroqClient {
 === CRITICAL DECISION TREE (FOLLOW IN ORDER) ===
 
 STEP 1: Does the input contain an EXPLICIT COMMAND KEYWORD?
-Command keywords: "open", "launch", "start", "search", "google", "play", "pause", "stop", "next", "previous", "skip", "mute", "unmute", "volume", "lock", "screenshot", "clipboard", "translate", "summarize", "format"
+Command keywords: "open", "launch", "start", "search", "google", "play", "pause", "stop", "next", "previous", "skip", "mute", "unmute", "volume", "lock", "screenshot", "clipboard", "translate", "summarize", "format", "shutdown", "restart", "reboot", "sleep", "brightness", "bluetooth", "wifi"
 
 If NO command keyword found → USE type_text (this is the DEFAULT)
 If YES command keyword found → Continue to Step 2
@@ -453,9 +453,16 @@ MEDIA CONTROL:
   Example: "Volume up" -> {"action": "volume_control", "payload": {"direction": "up"}}
 
 SYSTEM:
-- system_control: Trigger words: "lock", "screenshot", "sleep"
+- system_control: Trigger words: "lock", "screenshot", "sleep", "shutdown", "restart", "reboot", "brightness", "bluetooth", "wifi", "night light"
   Example: "Lock my computer" -> {"action": "system_control", "payload": {"action": "lock"}}
   Example: "Take a screenshot" -> {"action": "system_control", "payload": {"action": "screenshot"}}
+  Example: "Shutdown the computer" -> {"action": "system_control", "payload": {"action": "shutdown"}}
+  Example: "Restart" -> {"action": "system_control", "payload": {"action": "restart"}}
+  Example: "Put computer to sleep" -> {"action": "system_control", "payload": {"action": "sleep"}}
+  Example: "Turn on bluetooth" -> {"action": "system_control", "payload": {"action": "bluetooth"}}
+  Example: "Turn off wifi" -> {"action": "system_control", "payload": {"action": "wifi_toggle"}}
+  Example: "Set brightness to 50" -> {"action": "system_control", "payload": {"action": "brightness", "level": 50}}
+  Example: "Turn on night light" -> {"action": "system_control", "payload": {"action": "night_light"}}
 
 CLIPBOARD (only when "clipboard" is mentioned):
 - clipboard_format: "format my clipboard", "clipboard as bullets"

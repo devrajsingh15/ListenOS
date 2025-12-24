@@ -43,6 +43,9 @@ export async function checkForUpdates(silent = true) {
       }
     }
   } catch (error) {
-    console.error('Failed to check for updates:', error);
+    // Silently ignore - no release JSON exists yet or network issue
+    if (!silent) {
+      console.error('Failed to check for updates:', error);
+    }
   }
 }
