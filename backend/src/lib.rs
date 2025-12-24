@@ -309,6 +309,22 @@ pub fn run() {
             });
             log::info!("Clipboard monitoring with auto-learning started");
 
+            // Enable autostart by default on first launch
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let manager = app.autolaunch();
+                // Only enable if not already configured (first launch)
+                if let Ok(is_enabled) = manager.is_enabled() {
+                    if !is_enabled {
+                        if let Err(e) = manager.enable() {
+                            log::warn!("Failed to enable autostart: {}", e);
+                        } else {
+                            log::info!("Autostart enabled by default");
+                        }
+                    }
+                }
+            }
+
             log::info!("ListenOS setup complete - dual-window architecture ready");
             Ok(())
         })

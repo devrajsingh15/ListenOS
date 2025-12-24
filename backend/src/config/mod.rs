@@ -87,7 +87,7 @@ impl Default for AppConfig {
             api_keys: ApiKeys::default(),
             ui: UIConfig::default(),
             sound_feedback: true,
-            auto_start: false,
+            auto_start: true,
             dictation_style: DictationStyleConfig::default(),
         }
     }
