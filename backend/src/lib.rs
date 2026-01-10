@@ -285,7 +285,17 @@ pub fn run() {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 
                 log::info!("Checking for updates...");
-                match tauri_plugin_updater::UpdaterExt::updater(&app_handle).check().await {
+                
+                // Get the updater (returns Result)
+                let updater = match tauri_plugin_updater::UpdaterExt::updater(&app_handle) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        log::warn!("Failed to initialize updater: {}", e);
+                        return;
+                    }
+                };
+                
+                match updater.check().await {
                     Ok(Some(update)) => {
                         log::info!("Update available: {} -> {}", update.current_version, update.version);
                         // Notify the user via the dashboard window
