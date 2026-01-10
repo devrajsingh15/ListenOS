@@ -22,8 +22,8 @@ pub struct ApiConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
-            base_url: "http://localhost:3001".to_string(),
-            api_key: None,
+            base_url: "https://server-c6vdxgsxi-devrajsingh15s-projects.vercel.app".to_string(),
+            api_key: Some("listenos-desktop-app".to_string()),
             session_token: None,
         }
     }

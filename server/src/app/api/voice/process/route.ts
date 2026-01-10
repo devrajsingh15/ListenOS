@@ -19,15 +19,21 @@ interface ProcessRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
+    // Check for API key auth (desktop app) or Clerk auth (web)
+    const apiKey = request.headers.get("X-API-Key");
     const { userId } = await auth();
-    if (!userId) {
+    
+    // Allow if either API key matches or user is authenticated via Clerk
+    const validApiKey = process.env.LISTENOS_API_KEY || "listenos-desktop-app";
+    const isAuthorized = apiKey === validApiKey || userId;
+    
+    if (!isAuthorized) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     // Get API key from environment
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!groqKey) {
       return NextResponse.json(
         { error: "Server configuration error: Missing API key" },
         { status: 500 }
@@ -54,7 +60,7 @@ export async function POST(request: NextRequest) {
     const response = await fetch(GROQ_LLM_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${groqKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
