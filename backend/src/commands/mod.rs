@@ -181,33 +181,50 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         Err(_) => Vec::new(),
     };
 
-    // Transcribe with Groq (using dictionary hints)
-    let client = GroqClient::new();
-    
-    let transcription = match client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
-        Ok(result) => {
-            log::info!("Transcription: {}", result.text);
-            TranscriptionResult {
-                text: result.text,
-                duration_ms,
-                confidence: result.confidence,
-                is_final: true,
+    // Try server API first, fallback to direct Groq if server unavailable
+    let transcription = {
+        let api_client = state.api_client.lock().await;
+        match api_client.transcribe(&wav_data, Some(&dictionary_hints)).await {
+            Ok(result) => {
+                log::info!("Server transcription: {}", result.text);
+                TranscriptionResult {
+                    text: result.text,
+                    duration_ms,
+                    confidence: result.confidence,
+                    is_final: result.is_final,
+                }
             }
-        }
-        Err(e) => {
-            log::error!("Transcription failed: {}", e);
-            // Log error for UI notification
-            {
-                let mut error_log = state.error_log.lock().await;
-                error_log.log_error_with_details(
-                    crate::error_log::ErrorType::Transcription,
-                    "Voice transcription failed",
-                    e.clone()
-                );
+            Err(e) => {
+                log::warn!("Server transcription failed, trying direct Groq: {}", e);
+                // Fallback to direct Groq (for offline/dev mode)
+                let client = GroqClient::new();
+                match client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
+                    Ok(result) => {
+                        log::info!("Direct Groq transcription: {}", result.text);
+                        TranscriptionResult {
+                            text: result.text,
+                            duration_ms,
+                            confidence: result.confidence,
+                            is_final: true,
+                        }
+                    }
+                    Err(e2) => {
+                        log::error!("All transcription methods failed: {}", e2);
+                        // Log error for UI notification
+                        {
+                            let mut error_log = state.error_log.lock().await;
+                            error_log.log_error_with_details(
+                                crate::error_log::ErrorType::Transcription,
+                                "Voice transcription failed",
+                                e2.clone()
+                            );
+                        }
+                        let mut is_processing = state.is_processing.lock().await;
+                        *is_processing = false;
+                        return Err(format!("Transcription failed: {}", e2));
+                    }
+                }
             }
-            let mut is_processing = state.is_processing.lock().await;
-            *is_processing = false;
-            return Err(format!("Transcription failed: {}", e));
         }
     };
 
@@ -333,29 +350,93 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         (ctx, conversation.session_id.clone())
     };
 
-    // Process intent with LLM (with conversation context)
-    let action = match client.process_intent_with_context(&transcription.text, &context, &conv_context).await {
-        Ok(result) => {
-            log::info!("Action: {:?}", result.action_type);
-            result
-        }
-        Err(e) => {
-            log::warn!("LLM processing failed, defaulting to dictation: {}", e);
-            // Log error for UI notification (non-fatal - we fallback to dictation)
-            {
-                let mut error_log = state.error_log.lock().await;
-                error_log.log_error_with_details(
-                    crate::error_log::ErrorType::LLMProcessing,
-                    "AI processing failed, using dictation mode",
-                    e.clone()
-                );
+    // Process intent - try server API first, fallback to direct Groq
+    let action = {
+        let api_client = state.api_client.lock().await;
+        
+        // Build request for server API
+        let process_request = crate::api_client::ProcessRequest {
+            text: transcription.text.clone(),
+            context: Some(crate::api_client::VoiceContext {
+                active_app: context.active_app.clone(),
+                selected_text: context.selected_text.clone(),
+                os: context.os.clone(),
+                mode: match context.mode {
+                    cloud::VoiceMode::Dictation => "Dictation".to_string(),
+                    cloud::VoiceMode::Command => "Command".to_string(),
+                },
+            }),
+            conversation_history: Some(conv_context.history.clone()),
+            custom_commands: Some(conv_context.custom_commands.iter()
+                .map(|(trigger, name, id)| crate::api_client::CustomCommand {
+                    trigger: trigger.clone(),
+                    name: name.clone(),
+                    id: id.clone(),
+                })
+                .collect()),
+            dictation_style: Some(match conv_context.dictation_style {
+                cloud::DictationStyle::Formal => "Formal".to_string(),
+                cloud::DictationStyle::Casual => "Casual".to_string(),
+                cloud::DictationStyle::VeryCasual => "VeryCasual".to_string(),
+            }),
+        };
+        
+        match api_client.process_intent(process_request).await {
+            Ok(result) => {
+                log::info!("Server action: {}", result.action_type);
+                // Convert server response to local ActionResult
+                let action_type = match result.action_type.as_str() {
+                    "TypeText" => ActionType::TypeText,
+                    "RunCommand" => ActionType::RunCommand,
+                    "OpenApp" => ActionType::OpenApp,
+                    "OpenUrl" => ActionType::OpenUrl,
+                    "WebSearch" => ActionType::WebSearch,
+                    "VolumeControl" => ActionType::VolumeControl,
+                    "SystemControl" => ActionType::SystemControl,
+                    "SpotifyControl" => ActionType::SpotifyControl,
+                    "KeyboardShortcut" => ActionType::KeyboardShortcut,
+                    "WindowControl" => ActionType::WindowControl,
+                    "Respond" => ActionType::Respond,
+                    "Clarify" => ActionType::Clarify,
+                    "NoAction" => ActionType::NoAction,
+                    _ => ActionType::TypeText,
+                };
+                ActionResult {
+                    action_type,
+                    payload: result.payload,
+                    refined_text: result.refined_text,
+                    response_text: result.response_text,
+                    requires_confirmation: result.requires_confirmation,
+                }
             }
-            ActionResult {
-                action_type: ActionType::TypeText,
-                payload: serde_json::json!({}),
-                refined_text: Some(transcription.text.clone()),
-                response_text: None,
-                requires_confirmation: false,
+            Err(e) => {
+                log::warn!("Server processing failed, trying direct Groq: {}", e);
+                // Fallback to direct Groq
+                let client = GroqClient::new();
+                match client.process_intent_with_context(&transcription.text, &context, &conv_context).await {
+                    Ok(result) => {
+                        log::info!("Direct Groq action: {:?}", result.action_type);
+                        result
+                    }
+                    Err(e2) => {
+                        log::warn!("All processing failed, defaulting to dictation: {}", e2);
+                        {
+                            let mut error_log = state.error_log.lock().await;
+                            error_log.log_error_with_details(
+                                crate::error_log::ErrorType::LLMProcessing,
+                                "AI processing failed, using dictation mode",
+                                e2.clone()
+                            );
+                        }
+                        ActionResult {
+                            action_type: ActionType::TypeText,
+                            payload: serde_json::json!({}),
+                            refined_text: Some(transcription.text.clone()),
+                            response_text: None,
+                            requires_confirmation: false,
+                        }
+                    }
+                }
             }
         }
     };
