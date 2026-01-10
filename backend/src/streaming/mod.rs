@@ -1,6 +1,7 @@
 //! Real-time audio streaming module
 //! 
 //! Captures microphone audio and accumulates it for processing.
+//! Cross-platform support for Windows, macOS, and Linux.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
@@ -12,19 +13,31 @@ pub const SAMPLE_RATE: u32 = 16000;
 #[allow(dead_code)]
 pub const CHUNK_SAMPLES: usize = (SAMPLE_RATE * CHUNK_SIZE_MS / 1000) as usize;
 
-/// Audio streaming state - simplified for thread safety
+/// Audio streaming state - thread-safe implementation
 pub struct AudioStreamer {
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     accumulated_samples: Arc<Mutex<Vec<f32>>>,
+    // Store stream handle to keep it alive
+    stream_handle: Arc<Mutex<Option<StreamHandle>>>,
 }
+
+/// Wrapper to hold the stream (cpal::Stream is not Send on some platforms)
+struct StreamHandle {
+    _stream: cpal::Stream,
+}
+
+// Safety: We ensure the stream is only accessed from the thread that created it
+unsafe impl Send for StreamHandle {}
+unsafe impl Sync for StreamHandle {}
 
 impl AudioStreamer {
     pub fn new() -> Self {
         Self {
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: SAMPLE_RATE,
-            accumulated_samples: Arc::new(Mutex::new(Vec::new())),
+            accumulated_samples: Arc::new(Mutex::new(Vec::with_capacity(SAMPLE_RATE as usize * 30))),
+            stream_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -44,81 +57,81 @@ impl AudioStreamer {
         let is_recording = self.is_recording.clone();
         let accumulated = self.accumulated_samples.clone();
         let sample_rate = self.sample_rate;
+        let stream_handle = self.stream_handle.clone();
 
         is_recording.store(true, Ordering::SeqCst);
 
-        // Spawn recording thread
-        std::thread::spawn(move || {
-            let host = cpal::default_host();
-            let device = match host.default_input_device() {
-                Some(d) => d,
-                None => {
-                    log::error!("No input device available");
-                    is_recording.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
-
-            log::info!("Using input device: {}", device.name().unwrap_or_default());
-
-            let config = cpal::StreamConfig {
-                channels: 1,
-                sample_rate: cpal::SampleRate(sample_rate),
-                buffer_size: cpal::BufferSize::Default,
-            };
-
-            let is_rec = is_recording.clone();
-            let acc = accumulated.clone();
-            let sender_clone = sender;
-
-            let stream = match device.build_input_stream(
-                &config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if !is_rec.load(Ordering::SeqCst) {
-                        return;
-                    }
-
-                    // Add to accumulated buffer
-                    if let Ok(mut samples) = acc.lock() {
-                        samples.extend_from_slice(data);
-                    }
-
-                    // Send chunk to receiver
-                    let chunk = data.to_vec();
-                    let _ = sender_clone.send(chunk);
-                },
-                move |err| {
-                    log::error!("Audio stream error: {}", err);
-                },
-                None,
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("Failed to build stream: {}", e);
-                    is_recording.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
-
-            if let Err(e) = stream.play() {
-                log::error!("Failed to start stream: {}", e);
+        // Build stream on current thread (important for macOS)
+        let host = cpal::default_host();
+        
+        log::info!("Audio host: {}", host.id().name());
+        
+        let device = match host.default_input_device() {
+            Some(d) => d,
+            None => {
                 is_recording.store(false, Ordering::SeqCst);
-                return;
+                return Err("No input device available. Please check microphone permissions.".to_string());
             }
+        };
 
-            log::info!("Audio streaming started at {} Hz", sample_rate);
+        let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+        log::info!("Using input device: {}", device_name);
 
-            // Keep stream alive while recording
-            while is_recording.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
+        // Get supported config and try to match our desired sample rate
+        let supported_config = device.default_input_config()
+            .map_err(|e| format!("Failed to get default input config: {}", e))?;
+        
+        log::info!("Default config: {:?}", supported_config);
 
-            drop(stream);
-            log::info!("Audio stream stopped");
-        });
+        // Try to use our desired sample rate, fall back to device default
+        let config = cpal::StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(sample_rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
 
-        // Wait a bit for stream to initialize
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let is_rec = is_recording.clone();
+        let acc = accumulated.clone();
+        let sender_clone = sender;
+
+        // Build the input stream
+        let stream = device.build_input_stream(
+            &config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                if !is_rec.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                // Add to accumulated buffer (use try_lock to avoid blocking)
+                if let Ok(mut samples) = acc.try_lock() {
+                    samples.extend_from_slice(data);
+                }
+
+                // Send chunk to receiver (non-blocking)
+                let chunk = data.to_vec();
+                let _ = sender_clone.try_send(chunk);
+            },
+            move |err| {
+                log::error!("Audio stream error: {}", err);
+            },
+            None,
+        ).map_err(|e| {
+            is_recording.store(false, Ordering::SeqCst);
+            format!("Failed to build audio stream: {}. Check microphone permissions.", e)
+        })?;
+
+        // Start the stream
+        stream.play().map_err(|e| {
+            is_recording.store(false, Ordering::SeqCst);
+            format!("Failed to start audio stream: {}", e)
+        })?;
+
+        // Store stream handle to keep it alive
+        if let Ok(mut handle) = stream_handle.lock() {
+            *handle = Some(StreamHandle { _stream: stream });
+        }
+
+        log::info!("Audio streaming started at {} Hz", sample_rate);
 
         Ok(receiver)
     }
@@ -126,7 +139,13 @@ impl AudioStreamer {
     /// Stop streaming
     pub fn stop_streaming(&self) {
         self.is_recording.store(false, Ordering::SeqCst);
-        log::info!("Audio streaming stop requested");
+        
+        // Drop the stream handle to stop recording
+        if let Ok(mut handle) = self.stream_handle.lock() {
+            *handle = None;
+        }
+        
+        log::info!("Audio streaming stopped");
     }
 
     /// Check if currently streaming

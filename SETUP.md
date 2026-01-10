@@ -1,230 +1,334 @@
 # ListenOS Setup Guide
 
-This guide will help you set up the complete backend infrastructure for ListenOS.
+This guide covers the complete setup for ListenOS with the new hybrid architecture.
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        ListenOS System                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────────┐         ┌─────────────────────────┐   │
+│  │   Desktop App       │  HTTP   │   Backend API Server    │   │
+│  │   (Tauri + Next.js) │◄───────►│   (Next.js + Postgres)  │   │
+│  │                     │         │                         │   │
+│  │  • Audio capture    │         │  • AI Processing        │   │
+│  │  • System controls  │         │  • User auth (Clerk)    │   │
+│  │  • Keyboard/mouse   │         │  • Settings sync        │   │
+│  │  • Local actions    │         │  • Usage tracking       │   │
+│  └─────────────────────┘         └─────────────────────────┘   │
+│                                            │                    │
+│                                            ▼                    │
+│                                  ┌─────────────────────┐       │
+│                                  │   External APIs     │       │
+│                                  │  • Groq (STT/LLM)   │       │
+│                                  │  • Deepgram         │       │
+│                                  └─────────────────────┘       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Prerequisites
 
 - Node.js 20+
-- Railway account (for Postgres database)
+- Rust (latest stable)
+- Docker & Docker Compose (for local server)
 - Clerk account (for authentication)
-- GitHub repository with secrets configured
+- Groq API key (for AI processing)
 
 ---
 
-## 1. Database Setup (Railway Postgres)
+## Quick Start (Development)
 
-### Create a Database
-
-1. Go to [Railway](https://railway.app) and create a new project
-2. Click "Add New" → "Database" → "PostgreSQL"
-3. Once created, click on the database and go to "Variables"
-4. Copy the `DATABASE_URL` value
-
-### Push Schema to Database
-
-Add the DATABASE_URL to your `.env.local` file:
-
-```env
-DATABASE_URL=postgresql://postgres:password@host:5432/railway
-```
-
-Then run:
+### 1. Clone and Install
 
 ```bash
-cd server
-npx drizzle-kit push
-```
+git clone https://github.com/devrajsingh15/ListenOS.git
+cd ListenOS
 
-This will create all the tables (users, subscriptions, user_settings, command_history).
-
----
-
-## 2. Clerk Authentication Setup
-
-### Create Clerk Application
-
-1. Go to [Clerk Dashboard](https://dashboard.clerk.com)
-2. Create a new application
-3. Choose your sign-in options (Email, Google, GitHub, etc.)
-4. Go to "API Keys" and copy:
-   - **Publishable Key** (starts with `pk_`)
-   - **Secret Key** (starts with `sk_`)
-
-### Add Environment Variables
-
-Create `.env.local` in the project root:
-
-```env
-# Clerk Authentication
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-CLERK_SECRET_KEY=sk_test_...
-
-# Clerk URLs
-NEXT_PUBLIC_CLERK_SIGN_IN_URL=/auth/sign-in
-NEXT_PUBLIC_CLERK_SIGN_UP_URL=/auth/sign-up
-NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/
-NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/
-
-# Database
-DATABASE_URL=postgresql://...
-
-# API URL (your deployed Vercel app, optional for local dev)
-NEXT_PUBLIC_API_URL=https://your-api-domain.vercel.app
-```
-
-Create `server/.env`:
-
-```env
-# Clerk Authentication
-CLERK_SECRET_KEY=sk_test_...
-
-# Database
-DATABASE_URL=postgresql://...
-```
-
----
-
-## 3. Deploy API to Vercel
-
-The API routes need to be deployed to a server. Since this is a Next.js app, deploy to Vercel:
-
-1. Connect your GitHub repo to Vercel
-2. Set the root directory to `server`
-3. Add environment variables in Vercel dashboard:
-   - `DATABASE_URL`
-   - `CLERK_SECRET_KEY`
-4. Deploy
-
-The API will be available at `https://your-project.vercel.app/api/...`
-
----
-
-## 4. GitHub Release Setup (for Updates)
-
-### Generate Signing Keys
-
-Run this command to generate a new key pair:
-
-```bash
-npx @tauri-apps/cli@latest signer generate -w ~/.tauri/myapp.key
-```
-
-This will output:
-- A private key (save this securely)
-- A public key (already in `backend/tauri.conf.json`)
-
-### Add GitHub Secrets
-
-Go to your GitHub repo → Settings → Secrets and variables → Actions, and add:
-
-| Secret Name | Value |
-|-------------|-------|
-| `TAURI_SIGNING_PRIVATE_KEY` | The private key (base64 encoded content) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The password you set during generation |
-
-### Create a Release
-
-To trigger a release build:
-
-```bash
-# Update version in backend/tauri.conf.json first
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-This will:
-1. Trigger the GitHub Actions workflow
-2. Build the MSI installer
-3. Create a draft release with the installer attached
-
-Go to GitHub Releases, edit the draft, and publish it.
-
----
-
-## 5. Environment Variables Summary
-
-### `.env.local` (local development)
-
-```env
-# Clerk Authentication
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-CLERK_SECRET_KEY=sk_test_...
-NEXT_PUBLIC_CLERK_SIGN_IN_URL=/auth/sign-in
-NEXT_PUBLIC_CLERK_SIGN_UP_URL=/auth/sign-up
-NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/
-NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/
-
-# Database
-DATABASE_URL=postgresql://...
-
-# API URL (your deployed Vercel app)
-NEXT_PUBLIC_API_URL=https://your-app.vercel.app
-
-# AI Keys (for voice processing)
-GROQ_API_KEY=gsk_...
-DEEPGRAM_API_KEY=...
-```
-
-### Server Environment Variables (Vercel or server/.env)
-
-```env
-CLERK_SECRET_KEY=sk_test_...
-DATABASE_URL=postgresql://...
-```
-
-### GitHub Secrets
-
-- `TAURI_SIGNING_PRIVATE_KEY`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-
----
-
-## 6. Local Development
-
-```bash
-# Install dependencies
+# Install frontend dependencies
 npm install
+
+# Install server dependencies
 cd server && npm install && cd ..
+```
 
-# Push database schema
-cd server
-npx drizzle-kit push
-cd ..
+### 2. Configure Environment
 
-# Run development server
+Copy the example environment file:
+
+```bash
+cp .env.example .env.local
+```
+
+Edit `.env.local` with your keys:
+
+```env
+# Backend API Server
+LISTENOS_API_URL=http://localhost:3001
+
+# AI APIs (for server)
+GROQ_API_KEY=your_groq_api_key
+
+# Clerk Authentication
+CLERK_SECRET_KEY=your_clerk_secret
+CLERK_PUBLISHABLE_KEY=your_clerk_publishable
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable
+
+# Database
+DATABASE_URL=postgresql://listenos:listenos_dev@localhost:5432/listenos
+```
+
+### 3. Start the Backend Server
+
+**Option A: Using Docker (Recommended)**
+
+```bash
+# Start PostgreSQL and API server
+npm run docker:up
+
+# View logs
+npm run docker:logs
+```
+
+**Option B: Manual Setup**
+
+```bash
+# Start PostgreSQL separately (or use a cloud database)
+# Then run the server:
+npm run server:dev
+```
+
+### 4. Initialize Database
+
+```bash
+# Push schema to database
+npm run db:push
+```
+
+### 5. Start the Desktop App
+
+```bash
+# In a new terminal
 npm run tauri:dev
 ```
 
 ---
 
-## 7. Building for Production
+## Server Setup (Production)
+
+### Option 1: Docker Deployment
 
 ```bash
-# Build the desktop app
-npm run tauri:build
+cd server
 
-# The installer will be at:
-# backend/target/release/bundle/msi/ListenOS_X.X.X_x64_en-US.msi
+# Build and run with Docker Compose
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f api
+```
+
+### Option 2: Vercel Deployment
+
+1. Connect your GitHub repo to Vercel
+2. Set root directory to `server`
+3. Add environment variables:
+   - `DATABASE_URL`
+   - `GROQ_API_KEY`
+   - `CLERK_SECRET_KEY`
+   - `CLERK_PUBLISHABLE_KEY`
+4. Deploy
+
+### Option 3: Self-Hosted
+
+```bash
+cd server
+
+# Build
+npm run build
+
+# Start production server
+npm run start
+```
+
+---
+
+## Database Setup
+
+### Using Docker (Local Development)
+
+The `docker-compose.yml` includes PostgreSQL. Just run:
+
+```bash
+npm run docker:up
+```
+
+### Using Railway (Production)
+
+1. Go to [Railway](https://railway.app)
+2. Create new project → Add PostgreSQL
+3. Copy the `DATABASE_URL` from Variables tab
+4. Add to your environment
+
+### Push Schema
+
+```bash
+npm run db:push
+```
+
+### View Database
+
+```bash
+npm run db:studio
+```
+
+---
+
+## Clerk Authentication Setup
+
+1. Go to [Clerk Dashboard](https://dashboard.clerk.com)
+2. Create a new application
+3. Configure sign-in methods (Email, Google, GitHub)
+4. Copy API keys to your environment:
+   - `CLERK_SECRET_KEY` (starts with `sk_`)
+   - `CLERK_PUBLISHABLE_KEY` (starts with `pk_`)
+
+---
+
+## API Endpoints
+
+The backend server exposes these endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/voice/transcribe` | POST | Transcribe audio |
+| `/api/voice/process` | POST | Process intent |
+| `/api/settings` | GET/PUT | User settings |
+| `/api/users` | GET/POST | User management |
+
+---
+
+## Development Commands
+
+```bash
+# Start everything (server + desktop app)
+npm run dev:all
+
+# Start only the server
+npm run server:dev
+
+# Start only the desktop app
+npm run tauri:dev
+
+# Docker commands
+npm run docker:up      # Start containers
+npm run docker:down    # Stop containers
+npm run docker:logs    # View logs
+npm run docker:build   # Rebuild images
+
+# Database commands
+npm run db:push        # Push schema changes
+npm run db:studio      # Open Drizzle Studio
+
+# Build for production
+npm run tauri:build
+```
+
+---
+
+## Environment Variables Reference
+
+### Desktop App (`.env.local`)
+
+```env
+# API Server URL
+LISTENOS_API_URL=http://localhost:3001
+
+# Optional: API key for auth (if not using Clerk)
+LISTENOS_API_KEY=your_api_key
+
+# Fallback: Direct API keys (only used if server unavailable)
+GROQ_API_KEY=your_groq_key
+DEEPGRAM_API_KEY=your_deepgram_key
+```
+
+### Server (`server/.env`)
+
+```env
+# Database
+DATABASE_URL=postgresql://user:pass@host:5432/db
+
+# AI APIs
+GROQ_API_KEY=your_groq_key
+DEEPGRAM_API_KEY=your_deepgram_key
+
+# Clerk
+CLERK_SECRET_KEY=sk_...
+CLERK_PUBLISHABLE_KEY=pk_...
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
+
+# Server
+PORT=3001
+NODE_ENV=production
 ```
 
 ---
 
 ## Troubleshooting
 
-### Auth not working
+### Server not responding
 
-1. Ensure Clerk environment variables are set correctly
+1. Check if server is running: `curl http://localhost:3001/api/health`
+2. Check Docker logs: `npm run docker:logs`
+3. Verify environment variables are set
+
+### Authentication errors
+
+1. Ensure Clerk keys are correct
 2. Check that `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` starts with `pk_`
-3. Verify the sign-in/sign-up URLs match your routes
+3. Verify Clerk application is configured correctly
 
-### Updates not working
+### Database connection errors
 
-1. Ensure you've published a GitHub release (not draft)
-2. Check that `latest.json` is in the release assets
-3. Verify the public key in `tauri.conf.json` matches your private key
+1. Check `DATABASE_URL` format
+2. Ensure PostgreSQL is running
+3. Run `npm run db:push` to create tables
 
-### Database errors
+### Audio not working
 
-1. Check that `DATABASE_URL` is correct
-2. Run `npx drizzle-kit push` in the server directory to create/update tables
-3. Use `npx drizzle-kit studio` to inspect the database
+1. Check microphone permissions
+2. On macOS: Grant Accessibility permissions in System Preferences
+3. Verify audio device is selected in settings
+
+---
+
+## Building for Production
+
+### Desktop App
+
+```bash
+npm run tauri:build
+```
+
+Installers will be created in:
+- Windows: `backend/target/release/bundle/nsis/`
+- macOS: `backend/target/release/bundle/dmg/`
+
+### Server Docker Image
+
+```bash
+cd server
+docker build -t listenos-api .
+```
+
+---
+
+## Support
+
+- GitHub Issues: [Report a bug](https://github.com/devrajsingh15/ListenOS/issues)
+- Documentation: [README.md](README.md)

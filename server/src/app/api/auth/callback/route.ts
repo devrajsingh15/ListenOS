@@ -1,102 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClerkClient } from "@clerk/backend";
-import { db, users, subscriptions, userSettings } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { auth, currentUser } from "@clerk/nextjs/server";
 
-const clerk = createClerkClient({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
-
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const redirectUrl = searchParams.get("redirect_url");
+  
   try {
-    const body = await request.json();
-    const { userId } = body;
-
+    const { userId, getToken } = await auth();
+    
     if (!userId) {
-      return NextResponse.json({ error: "Missing user ID" }, { status: 400 });
+      // Not authenticated, redirect to sign-in
+      const signInUrl = new URL("/sign-in", request.url);
+      if (redirectUrl) {
+        signInUrl.searchParams.set("redirect_url", redirectUrl);
+      }
+      return NextResponse.redirect(signInUrl);
     }
 
-    // Get user details from Clerk
-    const clerkUser = await clerk.users.getUser(userId);
-
-    if (!clerkUser) {
-      return NextResponse.json({ error: "User not found in Clerk" }, { status: 404 });
+    // Get user details
+    const user = await currentUser();
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Check if user exists in our database
-    let dbUser = await db.query.users.findFirst({
-      where: eq(users.clerkUserId, clerkUser.id),
-    });
+    // Get session token
+    const token = await getToken();
 
-    if (!dbUser) {
-      // Create new user
-      const [newUser] = await db
-        .insert(users)
-        .values({
-          clerkUserId: clerkUser.id,
-          email: clerkUser.emailAddresses[0]?.emailAddress || "",
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-          profilePicture: clerkUser.imageUrl,
-        })
-        .returning();
+    // Prepare user data for the desktop app
+    const userData = {
+      id: user.id,
+      email: user.emailAddresses[0]?.emailAddress || "",
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
+      profilePicture: user.imageUrl || "",
+    };
 
-      dbUser = newUser;
-
-      // Create default subscription (free plan)
-      await db.insert(subscriptions).values({
-        userId: dbUser.id,
-        plan: "free",
-        status: "active",
-      });
-
-      // Create default settings
-      await db.insert(userSettings).values({
-        userId: dbUser.id,
-      });
-    } else {
-      // Update existing user info
-      await db
-        .update(users)
-        .set({
-          email: clerkUser.emailAddresses[0]?.emailAddress || dbUser.email,
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-          profilePicture: clerkUser.imageUrl,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, dbUser.id));
+    // If redirect_url is provided (desktop app callback), redirect there with token
+    if (redirectUrl && redirectUrl.startsWith("listenos://")) {
+      const callbackUrl = new URL(redirectUrl);
+      callbackUrl.searchParams.set("token", token || "");
+      callbackUrl.searchParams.set("user", encodeURIComponent(JSON.stringify(userData)));
+      return NextResponse.redirect(callbackUrl.toString());
     }
 
-    // Fetch updated user with relations
-    const fullUser = await db.query.users.findFirst({
-      where: eq(users.id, dbUser.id),
-      with: {
-        subscription: true,
-        settings: true,
-      },
-    });
-
+    // Otherwise return JSON response
     return NextResponse.json({
       success: true,
-      user: {
-        id: fullUser?.id,
-        email: fullUser?.email,
-        firstName: fullUser?.firstName,
-        lastName: fullUser?.lastName,
-        profilePicture: fullUser?.profilePicture,
-      },
-      subscription: fullUser?.subscription,
-      settings: fullUser?.settings,
+      user: userData,
+      token,
     });
   } catch (error) {
     console.error("Auth callback error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Authentication failed" },
+      { status: 500 }
+    );
   }
-}
-
-// Handle webhook events from Clerk (user created, updated, deleted)
-export async function GET(request: NextRequest) {
-  // For backwards compatibility - redirect to sign-in if accessed directly
-  return NextResponse.redirect(new URL("/", request.url));
 }

@@ -55,7 +55,7 @@ export async function PATCH(request: NextRequest) {
         ...(language !== undefined && { language }),
         ...(startOnLogin !== undefined && { startOnLogin }),
         ...(showInTray !== undefined && { showInTray }),
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       })
       .where(eq(userSettings.userId, user.id))
       .returning();

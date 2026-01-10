@@ -1,9 +1,21 @@
+"use client";
+
 import { SignIn } from "@clerk/nextjs";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export default function SignInPage() {
+function SignInContent() {
+  const searchParams = useSearchParams();
+  const redirectUrl = searchParams.get("redirect_url");
+  
+  // If there's a redirect_url (from desktop app), redirect to auth callback after sign-in
+  const afterSignInUrl = redirectUrl 
+    ? `/api/auth/callback?redirect_url=${encodeURIComponent(redirectUrl)}`
+    : "/";
+
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-slate-900">
       {/* Header */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-xl">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center">
@@ -28,10 +40,22 @@ export default function SignInPage() {
             routing="path"
             path="/sign-in"
             signUpUrl="/sign-up"
-            afterSignInUrl="/"
+            afterSignInUrl={afterSignInUrl}
           />
         </div>
       </main>
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+        <div className="animate-spin h-8 w-8 border-2 border-violet-500 border-t-transparent rounded-full" />
+      </div>
+    }>
+      <SignInContent />
+    </Suspense>
   );
 }

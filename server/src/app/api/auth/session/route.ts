@@ -1,95 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClerkClient } from "@clerk/backend";
-import { db, users } from "@/lib/db";
-import { eq } from "drizzle-orm";
-
-const clerk = createClerkClient({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
+import { auth, currentUser } from "@clerk/nextjs/server";
 
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  
-  if (!authHeader?.startsWith("Bearer ")) {
-    return NextResponse.json({ error: "Missing authorization header" }, { status: 401 });
-  }
-
-  const sessionToken = authHeader.slice(7);
-
   try {
-    // Verify the session token with Clerk
-    const session = await clerk.sessions.getSession(sessionToken);
+    const { userId } = await auth();
     
-    if (!session || session.status !== "active") {
-      return NextResponse.json({ error: "Invalid or expired session" }, { status: 401 });
+    if (!userId) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
     }
 
-    // Get user from our database
-    const user = await db.query.users.findFirst({
-      where: eq(users.clerkUserId, session.userId),
-      with: {
-        subscription: true,
-        settings: true,
-      },
-    });
-
+    const user = await currentUser();
     if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "User not found" },
+        { status: 404 }
+      );
     }
 
     return NextResponse.json({
       user: {
         id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        profilePicture: user.profilePicture,
+        email: user.emailAddresses[0]?.emailAddress || "",
+        firstName: user.firstName || "",
+        lastName: user.lastName || "",
+        profilePicture: user.imageUrl || "",
       },
-      subscription: user.subscription,
-      settings: user.settings,
+      subscription: null, // TODO: Fetch from database
+      settings: {
+        hotkey: "Ctrl+Space",
+        language: "en",
+        startOnLogin: true,
+        showInTray: true,
+      },
     });
   } catch (error) {
-    console.error("Session fetch error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
-  }
-}
-
-// Alternative endpoint for getting session by Clerk user ID
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { clerkUserId } = body;
-
-    if (!clerkUserId) {
-      return NextResponse.json({ error: "Missing Clerk user ID" }, { status: 400 });
-    }
-
-    // Get user from our database
-    const user = await db.query.users.findFirst({
-      where: eq(users.clerkUserId, clerkUserId),
-      with: {
-        subscription: true,
-        settings: true,
-      },
-    });
-
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        profilePicture: user.profilePicture,
-      },
-      subscription: user.subscription,
-      settings: user.settings,
-    });
-  } catch (error) {
-    console.error("Session fetch error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    console.error("Session error:", error);
+    return NextResponse.json(
+      { error: "Failed to get session" },
+      { status: 500 }
+    );
   }
 }

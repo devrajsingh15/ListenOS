@@ -1,32 +1,41 @@
 //! Cloud API providers for Listen OS
 //! 
-//! Uses embedded API keys for Groq and Deepgram - no user configuration needed.
+//! Supports two modes:
+//! 1. Remote mode (default): Uses backend API server for AI processing
+//! 2. Local mode (fallback): Direct API calls with environment keys
 
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
 
-// ============ API KEY HELPERS ============
-// Keys are base64 encoded to prevent GitHub secret scanning
-// This is intentional - these are development/demo keys bundled with the app
+// ============ API MODE ============
 
-/// Get the Groq API key (base64 encoded to bypass GitHub secret scanner)
-pub fn get_groq_key() -> String {
-    // Base64 encoded key - decode at runtime
-    let encoded = "Z3NrX2xRbkZsME5BN1RueVVVMXlFOXNhV0dkeWIzRllpZlFkMXdEaUc1UDNMR0xIVWpzTDdSWGk=";
-    String::from_utf8(
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-            .unwrap_or_default()
-    ).unwrap_or_default()
+/// API mode - remote (server) or local (direct)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApiMode {
+    /// Use backend API server (recommended)
+    Remote,
+    /// Direct API calls (fallback, requires local API keys)
+    Local,
 }
 
-/// Get the Deepgram API key (base64 encoded to bypass GitHub secret scanner)
+impl Default for ApiMode {
+    fn default() -> Self {
+        // Default to remote mode
+        ApiMode::Remote
+    }
+}
+
+// ============ API KEY HELPERS ============
+// For local/fallback mode only - reads from environment
+
+/// Get the Groq API key from environment
+pub fn get_groq_key() -> String {
+    std::env::var("GROQ_API_KEY").unwrap_or_default()
+}
+
+/// Get the Deepgram API key from environment
 pub fn get_deepgram_key() -> String {
-    // Base64 encoded key - decode at runtime
-    let encoded = "NThkNDMwNGJkNDlhOTJiYjA1ZjY0Y2I0ZTEzOGIzMThkYTIwZWJjYw==";
-    String::from_utf8(
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-            .unwrap_or_default()
-    ).unwrap_or_default()
+    std::env::var("DEEPGRAM_API_KEY").unwrap_or_default()
 }
 
 /// Extract a number from text (for brightness level, volume, etc.)
@@ -98,18 +107,23 @@ fn post_process_dictation(text: &str) -> String {
     result
 }
 
-/// Cloud configuration (simplified - keys are embedded)
+/// Cloud configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudConfig {
     pub stt_provider: STTProvider,
     pub llm_provider: LLMProvider,
+    pub api_mode: ApiMode,
+    pub api_server_url: String,
 }
 
 impl Default for CloudConfig {
     fn default() -> Self {
         Self {
-            stt_provider: STTProvider::Groq, // Fastest for batch
-            llm_provider: LLMProvider::Groq, // 20ms latency
+            stt_provider: STTProvider::Groq,
+            llm_provider: LLMProvider::Groq,
+            api_mode: ApiMode::Remote,
+            api_server_url: std::env::var("LISTENOS_API_URL")
+                .unwrap_or_else(|_| "http://localhost:3001".to_string()),
         }
     }
 }

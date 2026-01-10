@@ -20,6 +20,7 @@ mod dictionary;
 mod rate_limit;
 mod correction;
 mod error_log;
+mod api_client;
 
 use tauri::{
     Emitter, Manager, AppHandle,
@@ -43,6 +44,7 @@ pub use snippets::{Snippet, SnippetsStore};
 pub use dictionary::{DictionaryWord, DictionaryStore};
 pub use correction::CorrectionTracker;
 pub use error_log::{ErrorLog, ErrorEntry, ErrorType};
+pub use api_client::{ApiClient, ApiConfig};
 
 /// Global application state
 pub struct AppState {
@@ -66,6 +68,8 @@ pub struct AppState {
     pub correction_tracker: Arc<Mutex<CorrectionTracker>>,
     // Error logging
     pub error_log: Arc<Mutex<ErrorLog>>,
+    // API client for backend server
+    pub api_client: Arc<Mutex<ApiClient>>,
 }
 
 impl Default for AppState {
@@ -80,6 +84,14 @@ impl Default for AppState {
                 conversation.extracted_facts = facts;
             }
         }
+
+        // Initialize API client with config from environment
+        let api_config = ApiConfig {
+            base_url: std::env::var("LISTENOS_API_URL")
+                .unwrap_or_else(|_| "http://localhost:3001".to_string()),
+            api_key: std::env::var("LISTENOS_API_KEY").ok(),
+            session_token: None,
+        };
 
         Self {
             audio: Arc::new(Mutex::new(AudioState::default())),
@@ -97,6 +109,7 @@ impl Default for AppState {
             integrations: Arc::new(Mutex::new(IntegrationManager::new())),
             correction_tracker: Arc::new(Mutex::new(CorrectionTracker::new())),
             error_log: Arc::new(Mutex::new(ErrorLog::new())),
+            api_client: Arc::new(Mutex::new(ApiClient::with_config(api_config))),
         }
     }
 }
@@ -128,11 +141,18 @@ pub fn run() {
                     // Emit events to the assistant window (always running in background)
                     if let Some(assistant) = app.get_webview_window("assistant") {
                         if event.state == ShortcutState::Pressed {
-                            log::info!("Ctrl+Space pressed - showing assistant");
+                            log::info!("Hotkey pressed - showing assistant");
                             
-                            // Ensure transparency on Windows when showing
+                            // Ensure transparency when showing
                             #[cfg(target_os = "windows")]
                             {
+                                use tauri::webview::Color;
+                                let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
+                            }
+                            
+                            #[cfg(target_os = "macos")]
+                            {
+                                // macOS: Set window level and transparency
                                 use tauri::webview::Color;
                                 let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                             }
@@ -156,6 +176,30 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // This is called when a second instance is launched
+            // argv contains the command line arguments including deep link URLs
+            log::info!("Single instance callback: {:?}", argv);
+            
+            // Check for deep link URL in arguments
+            for arg in argv.iter() {
+                if arg.starts_with("listenos://") {
+                    log::info!("Deep link received: {}", arg);
+                    // Emit to frontend to handle auth callback
+                    if let Some(window) = app.get_webview_window("dashboard") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.emit("deep-link", arg.clone());
+                    }
+                }
+            }
+            
+            // Show the dashboard window
+            if let Some(window) = app.get_webview_window("dashboard") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             // Voice
@@ -269,6 +313,13 @@ pub fn run() {
                     use tauri::webview::Color;
                     let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                 }
+                
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri::webview::Color;
+                    let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
+                }
+                
                 let _ = assistant.hide();
                 log::info!("Assistant window initialized (hidden, transparent, click-through)");
             }

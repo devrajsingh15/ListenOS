@@ -803,6 +803,32 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 let _ = run_system_command(cmd).await;
             }
             
+            #[cfg(target_os = "macos")]
+            {
+                use std::process::Command;
+                let script = match direction {
+                    "up" => r#"set volume output volume ((output volume of (get volume settings)) + 10)"#,
+                    "down" => r#"set volume output volume ((output volume of (get volume settings)) - 10)"#,
+                    "mute" => r#"set volume output muted not (output muted of (get volume settings))"#,
+                    _ => r#"set volume output volume ((output volume of (get volume settings)) + 10)"#,
+                };
+                let _ = Command::new("osascript")
+                    .args(["-e", script])
+                    .output();
+            }
+            
+            #[cfg(not(any(windows, target_os = "macos")))]
+            {
+                // Linux: use pactl or amixer
+                let cmd = match direction {
+                    "up" => "pactl set-sink-volume @DEFAULT_SINK@ +10%",
+                    "down" => "pactl set-sink-volume @DEFAULT_SINK@ -10%",
+                    "mute" => "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+                    _ => "pactl set-sink-volume @DEFAULT_SINK@ +10%",
+                };
+                let _ = run_system_command(cmd.to_string()).await;
+            }
+            
             Ok(CommandResult {
                 success: true,
                 message: format!("Volume {}", direction),
@@ -1085,16 +1111,22 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
     }
 }
 
-/// Helper function to perform Ctrl+V paste
+/// Helper function to perform Ctrl+V (Windows/Linux) or Cmd+V (macOS) paste
 fn paste_with_enigo() -> Result<(), String> {
     use enigo::{Enigo, Keyboard, Key, Settings, Direction};
     
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("Failed to create enigo: {}", e))?;
     
-    // Press Ctrl
-    enigo.key(Key::Control, Direction::Press)
-        .map_err(|e| format!("Failed to press Ctrl: {}", e))?;
+    // Use Cmd on macOS, Ctrl on Windows/Linux
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+    
+    // Press modifier key
+    enigo.key(modifier, Direction::Press)
+        .map_err(|e| format!("Failed to press modifier: {}", e))?;
     
     // Small delay between key presses
     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1106,9 +1138,9 @@ fn paste_with_enigo() -> Result<(), String> {
     // Small delay before releasing
     std::thread::sleep(std::time::Duration::from_millis(20));
     
-    // Release Ctrl
-    enigo.key(Key::Control, Direction::Release)
-        .map_err(|e| format!("Failed to release Ctrl: {}", e))?;
+    // Release modifier key
+    enigo.key(modifier, Direction::Release)
+        .map_err(|e| format!("Failed to release modifier: {}", e))?;
     
     Ok(())
 }
@@ -1148,6 +1180,14 @@ pub async fn run_system_command(command: String) -> Result<CommandResult, String
 
 // ============ Keyboard Shortcut Helpers ============
 
+/// Get the primary modifier key for the current platform (Cmd on macOS, Ctrl elsewhere)
+fn get_primary_modifier() -> enigo::Key {
+    #[cfg(target_os = "macos")]
+    { enigo::Key::Meta }
+    #[cfg(not(target_os = "macos"))]
+    { enigo::Key::Control }
+}
+
 /// Execute a keyboard shortcut (copy, paste, undo, etc.)
 async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResult, String> {
     use enigo::{Enigo, Keyboard, Key, Settings, Direction};
@@ -1168,72 +1208,92 @@ async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResul
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("Failed to create enigo: {}", e))?;
     
+    // Use Cmd on macOS, Ctrl on Windows/Linux
+    let modifier = get_primary_modifier();
+    
     let result = match shortcut {
         "copy" => {
-            // Ctrl+C
-            send_key_combo(&mut enigo, &[Key::Control], 'c')
+            send_key_combo(&mut enigo, &[modifier], 'c')
         }
         "paste" => {
-            // Ctrl+V
-            send_key_combo(&mut enigo, &[Key::Control], 'v')
+            send_key_combo(&mut enigo, &[modifier], 'v')
         }
         "cut" => {
-            // Ctrl+X
-            send_key_combo(&mut enigo, &[Key::Control], 'x')
+            send_key_combo(&mut enigo, &[modifier], 'x')
         }
         "select_all" => {
-            // Ctrl+A
-            send_key_combo(&mut enigo, &[Key::Control], 'a')
+            send_key_combo(&mut enigo, &[modifier], 'a')
         }
         "undo" => {
-            // Ctrl+Z
-            send_key_combo(&mut enigo, &[Key::Control], 'z')
+            send_key_combo(&mut enigo, &[modifier], 'z')
         }
         "redo" => {
-            // Ctrl+Y (Windows) or Ctrl+Shift+Z (cross-platform)
-            send_key_combo(&mut enigo, &[Key::Control], 'y')
+            // Cmd+Shift+Z on macOS, Ctrl+Y on Windows
+            #[cfg(target_os = "macos")]
+            {
+                enigo.key(Key::Meta, Direction::Press).ok();
+                enigo.key(Key::Shift, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Unicode('z'), Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Shift, Direction::Release).ok();
+                enigo.key(Key::Meta, Direction::Release).ok();
+                Ok(())
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                send_key_combo(&mut enigo, &[Key::Control], 'y')
+            }
         }
         "save" => {
-            // Ctrl+S
-            send_key_combo(&mut enigo, &[Key::Control], 's')
+            send_key_combo(&mut enigo, &[modifier], 's')
         }
         "find" => {
-            // Ctrl+F
-            send_key_combo(&mut enigo, &[Key::Control], 'f')
+            send_key_combo(&mut enigo, &[modifier], 'f')
         }
         "new_tab" => {
-            // Ctrl+T
-            send_key_combo(&mut enigo, &[Key::Control], 't')
+            send_key_combo(&mut enigo, &[modifier], 't')
         }
         "close_tab" => {
-            // Ctrl+W
-            send_key_combo(&mut enigo, &[Key::Control], 'w')
+            send_key_combo(&mut enigo, &[modifier], 'w')
         }
         "new_window" => {
-            // Ctrl+N
-            send_key_combo(&mut enigo, &[Key::Control], 'n')
+            send_key_combo(&mut enigo, &[modifier], 'n')
         }
         "refresh" => {
-            // F5 or Ctrl+R
-            send_key_combo(&mut enigo, &[Key::Control], 'r')
+            send_key_combo(&mut enigo, &[modifier], 'r')
         }
         "back" => {
-            // Alt+Left
-            enigo.key(Key::Alt, Direction::Press).ok();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            enigo.key(Key::LeftArrow, Direction::Click).ok();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            enigo.key(Key::Alt, Direction::Release).ok();
-            Ok(())
+            // Cmd+[ on macOS, Alt+Left on Windows
+            #[cfg(target_os = "macos")]
+            {
+                send_key_combo(&mut enigo, &[Key::Meta], '[')
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                enigo.key(Key::Alt, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::LeftArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Alt, Direction::Release).ok();
+                Ok(())
+            }
         }
         "forward" => {
-            // Alt+Right
-            enigo.key(Key::Alt, Direction::Press).ok();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            enigo.key(Key::RightArrow, Direction::Click).ok();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            enigo.key(Key::Alt, Direction::Release).ok();
-            Ok(())
+            // Cmd+] on macOS, Alt+Right on Windows
+            #[cfg(target_os = "macos")]
+            {
+                send_key_combo(&mut enigo, &[Key::Meta], ']')
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                enigo.key(Key::Alt, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::RightArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Alt, Direction::Release).ok();
+                Ok(())
+            }
         }
         _ => Err(format!("Unknown shortcut: {}", shortcut)),
     };

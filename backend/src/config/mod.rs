@@ -77,8 +77,12 @@ pub enum DictationStyle {
 
 impl Default for AppConfig {
     fn default() -> Self {
+        // Use Ctrl+Space on all platforms (Cmd+Space conflicts with Spotlight on macOS)
+        // Users can customize this in settings
+        let default_hotkey = "Ctrl+Space".to_string();
+        
         Self {
-            trigger_hotkey: "Ctrl+Space".to_string(),
+            trigger_hotkey: default_hotkey,
             listening_mode: ListeningMode::PushToTalk,
             auto_copy: true,
             whisper: WhisperConfig::default(),

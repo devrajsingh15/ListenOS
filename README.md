@@ -1,10 +1,10 @@
 # 🎙️ ListenOS
 
-> **AI-Powered Voice Control System for Windows**
+> **AI-Powered Voice Control System for Windows & macOS**
 
-ListenOS is a native desktop application that lets you control your computer using natural voice commands. Simply hold **Ctrl+Space**, speak your command, and watch it execute instantly.
+ListenOS is a native desktop application that lets you control your computer using natural voice commands. Simply hold **Ctrl+Space** (Windows) or **Cmd+Space** (macOS), speak your command, and watch it execute instantly.
 
-![ListenOS Demo](https://img.shields.io/badge/Platform-Windows-blue) ![Tauri 2.0](https://img.shields.io/badge/Tauri-2.0-orange) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![Rust](https://img.shields.io/badge/Rust-stable-red)
+![ListenOS Demo](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue) ![Tauri 2.0](https://img.shields.io/badge/Tauri-2.0-orange) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![Rust](https://img.shields.io/badge/Rust-stable-red)
 
 ## ✨ Features
 
@@ -19,10 +19,18 @@ ListenOS is a native desktop application that lets you control your computer usi
 
 ### Prerequisites
 
+**Windows:**
 - **Windows 10/11** (64-bit)
 - **Node.js 18+** and **npm** or **bun**
 - **Rust** (latest stable) - [Install Rust](https://rustup.rs/)
 - **Visual Studio Build Tools** with C++ workload
+
+**macOS:**
+- **macOS 10.15+** (Catalina or later)
+- **Node.js 18+** and **npm** or **bun**
+- **Rust** (latest stable) - [Install Rust](https://rustup.rs/)
+- **Xcode Command Line Tools** (`xcode-select --install`)
+- Grant **Microphone** and **Accessibility** permissions when prompted
 
 ### Installation
 
@@ -171,13 +179,14 @@ RUST_LOG=debug npm run tauri:dev
 
 ## 📋 System Requirements
 
-| Component | Requirement |
-|-----------|-------------|
-| OS | Windows 10/11 (64-bit) |
-| RAM | 4GB minimum, 8GB recommended |
-| Storage | 200MB for installation |
-| Microphone | Any input device |
-| Internet | Required for AI processing |
+| Component | Windows | macOS |
+|-----------|---------|-------|
+| OS | Windows 10/11 (64-bit) | macOS 10.15+ (Catalina) |
+| RAM | 4GB minimum, 8GB recommended | 4GB minimum, 8GB recommended |
+| Storage | 200MB for installation | 200MB for installation |
+| Microphone | Any input device | Any input device |
+| Internet | Required for AI processing | Required for AI processing |
+| Permissions | - | Microphone, Accessibility |
 
 ## 🤝 Contributing
 

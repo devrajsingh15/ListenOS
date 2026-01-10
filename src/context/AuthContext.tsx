@@ -2,12 +2,13 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 
-// API configuration - for syncing with backend database
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+// API configuration
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 // Storage keys
 const STORAGE_KEY_USER = "listenos_user";
 const STORAGE_KEY_TOKEN = "listenos_token";
+const STORAGE_KEY_OFFLINE = "listenos_offline_mode";
 
 interface Subscription {
   id: string;
@@ -37,6 +38,7 @@ interface AuthContextType {
   settings: UserSettings | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  isOfflineMode: boolean;
   signIn: () => void;
   signOut: () => void;
   refreshUser: () => Promise<void>;
@@ -52,16 +54,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
 
   // Load stored auth data on mount
   useEffect(() => {
     const loadStoredAuth = () => {
       try {
+        // Check for offline mode
+        const offlineMode = localStorage.getItem(STORAGE_KEY_OFFLINE);
+        if (offlineMode === "true") {
+          setIsOfflineMode(true);
+        }
+
         const storedUser = localStorage.getItem(STORAGE_KEY_USER);
         const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN);
         
-        if (storedUser && storedToken) {
+        if (storedUser) {
           setUser(JSON.parse(storedUser));
+        }
+        if (storedToken) {
           setToken(storedToken);
         }
       } catch (error) {
@@ -74,42 +85,79 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadStoredAuth();
   }, []);
 
-  // Fetch user data from backend when token is available
-  useEffect(() => {
-    if (!token || !API_URL) return;
-
-    const fetchUserData = async () => {
-      try {
-        const response = await fetch(`${API_URL}/api/auth/session`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.subscription) setSubscription(data.subscription);
-          if (data.settings) setSettings(data.settings);
-        }
-      } catch (error) {
-        console.error("Failed to fetch user data:", error);
-      }
-    };
-
-    fetchUserData();
-  }, [token]);
-
   const handleAuthCallback = useCallback((newToken: string, userData: User) => {
     setToken(newToken);
     setUser(userData);
+    setIsOfflineMode(false);
     localStorage.setItem(STORAGE_KEY_TOKEN, newToken);
     localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userData));
+    localStorage.removeItem(STORAGE_KEY_OFFLINE);
   }, []);
 
+  // Listen for deep link auth callback
+  useEffect(() => {
+    const handleDeepLink = async () => {
+      try {
+        // Listen for deep-link events from Tauri (single instance callback)
+        const { listen } = await import("@tauri-apps/api/event");
+        
+        const unlisten = await listen<string>("deep-link", (event) => {
+          const url = event.payload;
+          console.log("Deep link received:", url);
+          
+          if (url.includes("auth/callback")) {
+            try {
+              const urlObj = new URL(url);
+              const callbackToken = urlObj.searchParams.get("token");
+              const userData = urlObj.searchParams.get("user");
+              
+              if (callbackToken && userData) {
+                const parsedUser = JSON.parse(decodeURIComponent(userData));
+                handleAuthCallback(callbackToken, parsedUser);
+              }
+            } catch (e) {
+              console.error("Failed to parse auth callback:", e);
+            }
+          }
+        });
+
+        // Also try to get initial deep link URL on startup
+        const { onOpenUrl } = await import("@tauri-apps/plugin-deep-link");
+        
+        onOpenUrl((urls) => {
+          for (const url of urls) {
+            console.log("Deep link URL opened:", url);
+            if (url.includes("auth/callback")) {
+              try {
+                const urlObj = new URL(url);
+                const callbackToken = urlObj.searchParams.get("token");
+                const userData = urlObj.searchParams.get("user");
+                
+                if (callbackToken && userData) {
+                  const parsedUser = JSON.parse(decodeURIComponent(userData));
+                  handleAuthCallback(callbackToken, parsedUser);
+                }
+              } catch (e) {
+                console.error("Failed to parse auth callback:", e);
+              }
+            }
+          }
+        });
+
+        return () => {
+          unlisten();
+        };
+      } catch (error) {
+        // Not in Tauri environment
+        console.log("Deep link not available:", error);
+      }
+    };
+
+    handleDeepLink();
+  }, [handleAuthCallback]);
+
   const refreshUser = useCallback(async () => {
-    if (!token || !API_URL) return;
+    if (!token || isOfflineMode) return;
 
     try {
       const response = await fetch(`${API_URL}/api/auth/session`, {
@@ -132,14 +180,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to refresh user data:", error);
     }
-  }, [token]);
+  }, [token, isOfflineMode]);
 
   const signIn = useCallback(() => {
     // Open the auth URL in the default browser
-    // The deep-link will redirect back to the app after authentication
-    const authUrl = API_URL ? `${API_URL}/sign-in?redirect=listenos://auth/callback` : "";
-    if (authUrl && typeof window !== "undefined") {
-      // Use Tauri shell to open URL if available, otherwise fallback to window.open
+    const authUrl = `${API_URL}/sign-in?redirect_url=listenos://auth/callback`;
+    
+    if (typeof window !== "undefined") {
+      // Use Tauri shell to open URL if available
       import("@tauri-apps/plugin-shell").then(({ open }) => {
         open(authUrl);
       }).catch(() => {
@@ -153,16 +201,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setSubscription(null);
     setSettings(null);
+    setIsOfflineMode(false);
     localStorage.removeItem(STORAGE_KEY_USER);
     localStorage.removeItem(STORAGE_KEY_TOKEN);
+    localStorage.removeItem(STORAGE_KEY_OFFLINE);
   }, []);
 
   const updateSettings = useCallback(async (newSettings: Partial<UserSettings>) => {
-    if (!token || !API_URL) return;
+    if (isOfflineMode) {
+      // In offline mode, just update local state
+      setSettings(prev => prev ? { ...prev, ...newSettings } : null);
+      return;
+    }
+
+    if (!token) return;
 
     try {
-      const response = await fetch(`${API_URL}/api/users/me`, {
-        method: "PATCH",
+      const response = await fetch(`${API_URL}/api/settings`, {
+        method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
@@ -171,15 +227,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (response.ok) {
-        const data = await response.json();
-        if (data.settings) {
-          setSettings(data.settings);
-        }
+        setSettings(prev => prev ? { ...prev, ...newSettings } : null);
       }
     } catch (error) {
       console.error("Failed to update settings:", error);
     }
-  }, [token]);
+  }, [token, isOfflineMode]);
 
   return (
     <AuthContext.Provider
@@ -189,6 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         settings,
         isLoading,
         isAuthenticated: !!user,
+        isOfflineMode,
         signIn,
         signOut,
         refreshUser,
