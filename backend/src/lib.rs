@@ -87,7 +87,7 @@ impl Default for AppState {
 
         // Initialize API client with config from environment
         let api_base_url = std::env::var("LISTENOS_API_URL")
-            .unwrap_or_else(|_| "https://server-c6vdxgsxi-devrajsingh15s-projects.vercel.app".to_string());
+            .unwrap_or_else(|_| "https://server-bay-omega-45.vercel.app".to_string());
         
         let api_config = ApiConfig {
             base_url: api_base_url,

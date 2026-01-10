@@ -120,13 +120,13 @@ export default function AssistantPage() {
   return (
     <div className="h-full w-full flex items-center justify-center" style={{ background: "transparent" }}>
       <motion.div
-        className="relative flex items-center justify-center rounded-full cursor-pointer overflow-hidden"
+        className="relative flex items-center justify-center rounded-full cursor-pointer overflow-hidden keep-bg"
         style={{
           background: isActive 
             ? "linear-gradient(135deg, rgba(59,130,246,0.95), rgba(147,51,234,0.95))"
-            : "rgba(20,20,20,0.9)",
+            : "rgba(20,20,20,0.95)",
           backdropFilter: "blur(16px)",
-          border: isActive ? "1px solid rgba(255,255,255,0.3)" : "1px solid rgba(255,255,255,0.08)",
+          border: isActive ? "1px solid rgba(255,255,255,0.3)" : "1px solid rgba(255,255,255,0.1)",
         }}
         initial={false}
         animate={{
@@ -134,7 +134,7 @@ export default function AssistantPage() {
           height: 28,
           boxShadow: isActive 
             ? `0 0 ${20 + audioLevel * 30}px rgba(99,102,241,${0.4 + audioLevel * 0.4})` 
-            : "0 2px 8px rgba(0,0,0,0.4)",
+            : "0 2px 12px rgba(0,0,0,0.5)",
         }}
         transition={{ type: "spring", stiffness: 500, damping: 35 }}
         onMouseEnter={() => setHovered(true)}

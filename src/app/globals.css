@@ -109,12 +109,16 @@ body.assistant-mode,
   box-shadow: none !important;
   overflow: hidden !important;
   user-select: none;
-  pointer-events: none !important;
   color: white;
   margin: 0 !important;
   padding: 0 !important;
   width: 100% !important;
   height: 100% !important;
+}
+
+/* Allow pointer events on the pill itself */
+.assistant-mode .cursor-pointer {
+  pointer-events: auto !important;
 }
 
 /* Force all children to be transparent by default in assistant mode */
