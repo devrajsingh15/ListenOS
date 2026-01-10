@@ -91,7 +91,8 @@ impl Default for AppState {
         
         let api_config = ApiConfig {
             base_url: api_base_url,
-            api_key: std::env::var("LISTENOS_API_KEY").ok(),
+            api_key: Some(std::env::var("LISTENOS_API_KEY")
+                .unwrap_or_else(|_| "listenos-desktop-app".to_string())),
             session_token: None,
         };
 
