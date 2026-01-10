@@ -181,7 +181,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         Err(_) => Vec::new(),
     };
 
-    // Try server API first, fallback to direct Groq if server unavailable
+    // Use server API for transcription (key is on server)
     let transcription = {
         let api_client = state.api_client.lock().await;
         match api_client.transcribe(&wav_data, Some(&dictionary_hints)).await {
@@ -195,35 +195,18 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 }
             }
             Err(e) => {
-                log::warn!("Server transcription failed, trying direct Groq: {}", e);
-                // Fallback to direct Groq (for offline/dev mode)
-                let client = GroqClient::new();
-                match client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
-                    Ok(result) => {
-                        log::info!("Direct Groq transcription: {}", result.text);
-                        TranscriptionResult {
-                            text: result.text,
-                            duration_ms,
-                            confidence: result.confidence,
-                            is_final: true,
-                        }
-                    }
-                    Err(e2) => {
-                        log::error!("All transcription methods failed: {}", e2);
-                        // Log error for UI notification
-                        {
-                            let mut error_log = state.error_log.lock().await;
-                            error_log.log_error_with_details(
-                                crate::error_log::ErrorType::Transcription,
-                                "Voice transcription failed",
-                                e2.clone()
-                            );
-                        }
-                        let mut is_processing = state.is_processing.lock().await;
-                        *is_processing = false;
-                        return Err(format!("Transcription failed: {}", e2));
-                    }
+                log::error!("Transcription failed: {}", e);
+                {
+                    let mut error_log = state.error_log.lock().await;
+                    error_log.log_error_with_details(
+                        crate::error_log::ErrorType::Transcription,
+                        "Voice transcription failed",
+                        e.clone()
+                    );
                 }
+                let mut is_processing = state.is_processing.lock().await;
+                *is_processing = false;
+                return Err(format!("Transcription failed: {}", e));
             }
         }
     };
@@ -350,7 +333,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         (ctx, conversation.session_id.clone())
     };
 
-    // Process intent - try server API first, fallback to direct Groq
+    // Use server API for intent processing
     let action = {
         let api_client = state.api_client.lock().await;
         
@@ -384,7 +367,6 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         match api_client.process_intent(process_request).await {
             Ok(result) => {
                 log::info!("Server action: {}", result.action_type);
-                // Convert server response to local ActionResult
                 let action_type = match result.action_type.as_str() {
                     "TypeText" => ActionType::TypeText,
                     "RunCommand" => ActionType::RunCommand,
@@ -410,32 +392,21 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 }
             }
             Err(e) => {
-                log::warn!("Server processing failed, trying direct Groq: {}", e);
-                // Fallback to direct Groq
-                let client = GroqClient::new();
-                match client.process_intent_with_context(&transcription.text, &context, &conv_context).await {
-                    Ok(result) => {
-                        log::info!("Direct Groq action: {:?}", result.action_type);
-                        result
-                    }
-                    Err(e2) => {
-                        log::warn!("All processing failed, defaulting to dictation: {}", e2);
-                        {
-                            let mut error_log = state.error_log.lock().await;
-                            error_log.log_error_with_details(
-                                crate::error_log::ErrorType::LLMProcessing,
-                                "AI processing failed, using dictation mode",
-                                e2.clone()
-                            );
-                        }
-                        ActionResult {
-                            action_type: ActionType::TypeText,
-                            payload: serde_json::json!({}),
-                            refined_text: Some(transcription.text.clone()),
-                            response_text: None,
-                            requires_confirmation: false,
-                        }
-                    }
+                log::warn!("Server processing failed, defaulting to dictation: {}", e);
+                {
+                    let mut error_log = state.error_log.lock().await;
+                    error_log.log_error_with_details(
+                        crate::error_log::ErrorType::LLMProcessing,
+                        "AI processing unavailable, using dictation mode",
+                        e.clone()
+                    );
+                }
+                ActionResult {
+                    action_type: ActionType::TypeText,
+                    payload: serde_json::json!({}),
+                    refined_text: Some(transcription.text.clone()),
+                    response_text: None,
+                    requires_confirmation: false,
                 }
             }
         }
@@ -533,6 +504,37 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, St
         audio_device: audio.selected_device.clone(),
         last_transcription: None,
     })
+}
+
+/// Get real-time audio level (0.0 to 1.0) for visualization
+#[tauri::command]
+pub async fn get_audio_level(state: State<'_, AppState>) -> Result<f32, String> {
+    let is_listening = *state.is_listening.lock().await;
+    if !is_listening {
+        return Ok(0.0);
+    }
+    
+    let accumulator = state.accumulator.lock().await;
+    let samples = accumulator.get_samples();
+    
+    // Get the last ~50ms of audio for real-time level
+    let recent_samples = if samples.len() > 800 {
+        &samples[samples.len() - 800..]
+    } else {
+        samples
+    };
+    
+    if recent_samples.is_empty() {
+        return Ok(0.0);
+    }
+    
+    // Calculate RMS (root mean square) for audio level
+    let rms: f32 = (recent_samples.iter().map(|s| s * s).sum::<f32>() / recent_samples.len() as f32).sqrt();
+    
+    // Normalize to 0-1 range (typical speech RMS is 0.01-0.3)
+    let normalized = (rms * 5.0).min(1.0);
+    
+    Ok(normalized)
 }
 
 // ============ Audio Device Commands ============

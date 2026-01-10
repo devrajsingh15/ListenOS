@@ -8,64 +8,62 @@ import {
   stopListening,
   onShortcutPressed,
   onShortcutReleased,
-  hideAssistant,
+  getAudioLevel,
   VoiceProcessingResult,
 } from "@/lib/tauri";
 
 type AssistantState = "idle" | "listening" | "processing" | "success" | "error";
 
-// Format action type for display
 function formatActionFeedback(result: VoiceProcessingResult): string | null {
   const actionType = result.action?.action_type;
-  if (!actionType || actionType === "NoAction" || actionType === "TypeText") {
-    return null; // Don't show feedback for typing or no action
-  }
+  if (!actionType || actionType === "NoAction" || actionType === "TypeText") return null;
   
-  // Format action type to readable text
-  const formatted = actionType
-    .replace(/([A-Z])/g, " $1") // Add space before caps
-    .trim()
-    .toLowerCase();
-  
-  // Get specific feedback based on action
   switch (actionType) {
-    case "OpenApp":
-      return `Opening ${result.action?.payload?.app || "app"}`;
-    case "WebSearch":
-      return `Searching: ${result.action?.payload?.query || "..."}`;
-    case "OpenUrl":
-      return "Opening URL";
-    case "VolumeControl":
-      return `Volume ${result.action?.payload?.direction || "changed"}`;
-    case "KeyboardShortcut":
-      return `${result.action?.payload?.shortcut || "Shortcut"}`;
-    case "WindowControl":
-      return `Window: ${result.action?.payload?.action || "control"}`;
-    case "SpotifyControl":
-      return `Media: ${result.action?.payload?.action || "control"}`;
-    case "SystemControl":
-      return `System: ${result.action?.payload?.action || "control"}`;
-    case "Respond":
-      return result.response_text ? result.response_text.slice(0, 50) : null;
-    default:
-      return formatted;
+    case "OpenApp": return `Opening ${result.action?.payload?.app || "app"}`;
+    case "WebSearch": return `Searching...`;
+    case "OpenUrl": return "Opening URL";
+    case "VolumeControl": return `Volume ${result.action?.payload?.direction}`;
+    case "SpotifyControl": return `${result.action?.payload?.action}`;
+    case "SystemControl": return `${result.action?.payload?.action}`;
+    default: return null;
   }
 }
 
 export default function AssistantPage() {
-  const [state, setState] = useState<AssistantState>("listening");
+  const [state, setState] = useState<AssistantState>("idle");
   const [mounted, setMounted] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const stateRef = useRef<AssistantState>("idle");
+  const audioLevelInterval = useRef<NodeJS.Timeout | null>(null);
 
-  const stateRef = useRef<AssistantState>("listening");
+  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => { stateRef.current = state; }, [state]);
 
+  // Poll audio level when listening
   useEffect(() => {
-    // Intentional: set mounted state on component mount for hydration
-    setMounted(true); // eslint-disable-line react-hooks/set-state-in-effect
-  }, []);
-
-  useEffect(() => {
-    stateRef.current = state;
+    if (state === "listening" && isTauri()) {
+      audioLevelInterval.current = setInterval(async () => {
+        try {
+          const level = await getAudioLevel();
+          setAudioLevel(level);
+        } catch {
+          // Ignore errors
+        }
+      }, 50); // 20fps for smooth animation
+    } else {
+      if (audioLevelInterval.current) {
+        clearInterval(audioLevelInterval.current);
+        audioLevelInterval.current = null;
+      }
+      setAudioLevel(0);
+    }
+    return () => {
+      if (audioLevelInterval.current) {
+        clearInterval(audioLevelInterval.current);
+      }
+    };
   }, [state]);
 
   const start = useCallback(async () => {
@@ -74,7 +72,7 @@ export default function AssistantPage() {
       await startListening();
       setState("listening");
     } catch (e) {
-      console.warn("Start listening failed:", e);
+      console.warn("Start failed:", e);
     }
   }, []);
 
@@ -84,39 +82,22 @@ export default function AssistantPage() {
     setFeedback(null);
     try {
       const result = await stopListening();
-      // If no input detected, silently dismiss without any animation
       if (result.action?.action_type === "NoAction") {
         setState("idle");
-        if (isTauri()) hideAssistant().catch(() => {});
         return;
       }
-      
-      // Get feedback text for the action
       const feedbackText = formatActionFeedback(result);
-      if (feedbackText) {
-        setFeedback(feedbackText);
-      }
-      
+      if (feedbackText) setFeedback(feedbackText);
       setState("success");
-      setTimeout(() => {
-        if (isTauri()) hideAssistant().catch(() => {});
-        setState("idle");
-        setFeedback(null);
-      }, feedbackText ? 1000 : 600); // Show feedback a bit longer
-    } catch (e) {
-      console.warn("Stop listening failed:", e);
+      setTimeout(() => { setState("idle"); setFeedback(null); }, feedbackText ? 1200 : 600);
+    } catch {
       setState("error");
-      setTimeout(() => {
-        if (isTauri()) hideAssistant().catch(() => {});
-        setState("idle");
-        setFeedback(null);
-      }, 800);
+      setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
     }
   }, []);
 
   useEffect(() => {
     if (!mounted || !isTauri()) return;
-
     let unlistenPressed: (() => void) | undefined;
     let unlistenReleased: (() => void) | undefined;
 
@@ -128,86 +109,117 @@ export default function AssistantPage() {
         unlistenReleased = await onShortcutReleased(() => {
           if (stateRef.current === "listening") stop();
         });
-      } catch (e) {
-        console.warn("Failed to setup event listeners:", e);
-      }
+      } catch (e) { console.warn("Setup failed:", e); }
     };
-
     setup();
-    return () => {
-      unlistenPressed?.();
-      unlistenReleased?.();
-    };
+    return () => { unlistenPressed?.(); unlistenReleased?.(); };
   }, [mounted, start, stop]);
 
+  const isActive = state !== "idle";
+
   return (
-    <div
-      className="h-full w-full flex items-center justify-center"
-      style={{ background: "transparent" }}
-    >
-      <div className="relative flex flex-col items-center justify-center w-full h-full gap-2">
+    <div className="h-full w-full flex items-center justify-center" style={{ background: "transparent" }}>
+      <motion.div
+        className="relative flex items-center justify-center rounded-full cursor-pointer overflow-hidden"
+        style={{
+          background: isActive 
+            ? "linear-gradient(135deg, rgba(59,130,246,0.95), rgba(147,51,234,0.95))"
+            : "rgba(20,20,20,0.9)",
+          backdropFilter: "blur(16px)",
+          border: isActive ? "1px solid rgba(255,255,255,0.3)" : "1px solid rgba(255,255,255,0.08)",
+        }}
+        initial={false}
+        animate={{
+          width: isActive ? 160 : (hovered ? 110 : 44),
+          height: 28,
+          boxShadow: isActive 
+            ? `0 0 ${20 + audioLevel * 30}px rgba(99,102,241,${0.4 + audioLevel * 0.4})` 
+            : "0 2px 8px rgba(0,0,0,0.4)",
+        }}
+        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={() => { if (state === "idle") start(); }}
+      >
         <AnimatePresence mode="wait">
-          {state === "listening" && <ListeningAnimation key="listening" />}
-          {state === "processing" && <ProcessingAnimation key="processing" />}
-          {state === "success" && <SuccessAnimation key="success" feedback={feedback} />}
-          {state === "error" && <ErrorAnimation key="error" />}
+          {state === "idle" && <IdlePill key="idle" hovered={hovered} />}
+          {state === "listening" && <LiveWaveform key="listening" level={audioLevel} />}
+          {state === "processing" && <ProcessingSpinner key="processing" />}
+          {state === "success" && <SuccessCheck key="success" feedback={feedback} />}
+          {state === "error" && <ErrorX key="error" />}
         </AnimatePresence>
-      </div>
+      </motion.div>
     </div>
   );
 }
 
-// Idle: Pulsing pill
-function IdleAnimation() {
+function IdlePill({ hovered }: { hovered: boolean }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="flex items-center gap-2"
+      className="flex items-center gap-1.5 px-2"
     >
-      <div className="flex gap-1">
-        {[...Array(3)].map((_, i) => (
-          <motion.div
-            key={i}
-            className="w-1.5 h-1.5 rounded-full bg-white/50 keep-bg"
-            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
-            transition={{
-              duration: 1.5,
-              repeat: Infinity,
-              delay: i * 0.2,
-              ease: "easeInOut",
-            }}
-          />
-        ))}
-      </div>
+      <motion.div
+        animate={{ scale: [1, 1.1, 1] }}
+        transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <svg className="w-3.5 h-3.5 text-white/60" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1 1.93c-3.94-.49-7-3.85-7-7.93h2c0 3.31 2.69 6 6 6s6-2.69 6-6h2c0 4.08-3.06 7.44-7 7.93V19h4v2H8v-2h4v-3.07z"/>
+        </svg>
+      </motion.div>
+      <AnimatePresence>
+        {hovered && (
+          <motion.span
+            initial={{ opacity: 0, width: 0 }}
+            animate={{ opacity: 1, width: "auto" }}
+            exit={{ opacity: 0, width: 0 }}
+            className="text-[10px] text-white/50 whitespace-nowrap overflow-hidden font-medium"
+          >
+            Ctrl+Space
+          </motion.span>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
 
-// Listening: Voice Waveform
-function ListeningAnimation() {
-  const bars = 20;
+function LiveWaveform({ level }: { level: number }) {
+  const bars = 16;
+  // Create varied heights based on audio level with some randomness for natural look
+  const getBarHeight = (index: number) => {
+    const baseHeight = 3;
+    const maxHeight = 18;
+    // Create a wave pattern centered in the middle
+    const centerDistance = Math.abs(index - bars / 2) / (bars / 2);
+    const waveMultiplier = 1 - centerDistance * 0.5;
+    // Add some randomness that changes with level
+    const randomFactor = 0.7 + Math.random() * 0.6;
+    return baseHeight + (maxHeight - baseHeight) * level * waveMultiplier * randomFactor;
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="flex items-center gap-1 h-8"
+      className="flex items-center justify-center gap-[2px] px-2 h-full"
     >
       {[...Array(bars)].map((_, i) => (
         <motion.div
           key={i}
-          className="w-1.5 rounded-full bg-gradient-to-t from-blue-500 to-purple-500 keep-bg"
-          animate={{
-            height: [8, Math.random() * 24 + 8, 8],
+          className="w-[3px] rounded-full"
+          style={{
+            background: `linear-gradient(to top, rgba(255,255,255,0.9), rgba(255,255,255,0.6))`,
+          }}
+          animate={{ 
+            height: getBarHeight(i),
+            opacity: 0.5 + level * 0.5,
           }}
           transition={{
-            duration: 0.5,
-            repeat: Infinity,
-            repeatType: "reverse",
-            delay: i * 0.05,
-            ease: "easeInOut",
+            height: { duration: 0.05, ease: "linear" },
+            opacity: { duration: 0.1 },
           }}
         />
       ))}
@@ -215,68 +227,60 @@ function ListeningAnimation() {
   );
 }
 
-// Processing: Spinning Galaxy Ring
-function ProcessingAnimation() {
+function ProcessingSpinner() {
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.5 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.5 }}
-      className="relative w-8 h-8"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="flex items-center gap-1.5 px-2"
     >
-      {/* Outer spinning ring */}
       <motion.div
-        className="absolute inset-0 rounded-full border-2 border-transparent border-t-blue-500 border-r-purple-500 keep-bg"
+        className="w-3.5 h-3.5 rounded-full border-2 border-white/20 border-t-white"
         animate={{ rotate: 360 }}
-        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+        transition={{ duration: 0.6, repeat: Infinity, ease: "linear" }}
       />
-      {/* Inner spinning ring (reverse) */}
-      <motion.div
-        className="absolute inset-1 rounded-full border-2 border-transparent border-b-blue-400 border-l-purple-400 keep-bg"
-        animate={{ rotate: -360 }}
-        transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-      />
-      {/* Core glow */}
-      <div className="absolute inset-0 m-auto w-2 h-2 rounded-full bg-white/80 blur-sm keep-bg" />
+      <span className="text-[10px] text-white/80 font-medium">Processing</span>
     </motion.div>
   );
 }
 
-// Success: Check with optional feedback text
-function SuccessAnimation({ feedback }: { feedback: string | null }) {
+function SuccessCheck({ feedback }: { feedback: string | null }) {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
-      className="flex flex-col items-center justify-center gap-1"
+      className="flex items-center gap-1.5 px-2"
     >
-      <div className="flex items-center gap-2 text-green-400">
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-        </svg>
-        {feedback && (
-          <span className="text-xs text-white/90 font-medium max-w-48 truncate">
-            {feedback}
-          </span>
-        )}
-      </div>
+      <motion.svg 
+        className="w-3.5 h-3.5 text-green-400" 
+        fill="none" 
+        stroke="currentColor" 
+        viewBox="0 0 24 24"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.3 }}
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+      </motion.svg>
+      {feedback && <span className="text-[10px] text-white/90 truncate max-w-28 font-medium">{feedback}</span>}
     </motion.div>
   );
 }
 
-// Error: Simple X (no text)
-function ErrorAnimation() {
+function ErrorX() {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
-      className="flex items-center justify-center text-red-400"
+      className="flex items-center gap-1.5 px-2"
     >
-      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+      <svg className="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
       </svg>
+      <span className="text-[10px] text-white/80 font-medium">Failed</span>
     </motion.div>
   );
 }

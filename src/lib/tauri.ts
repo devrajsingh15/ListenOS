@@ -112,6 +112,11 @@ export async function getStatus(): Promise<StatusResponse> {
   return invoke("get_status");
 }
 
+// Get real-time audio level (0.0 to 1.0) for visualization
+export async function getAudioLevel(): Promise<number> {
+  return invoke("get_audio_level");
+}
+
 // ============ Action Commands ============
 
 export async function typeText(text: string): Promise<{ success: boolean; message: string }> {

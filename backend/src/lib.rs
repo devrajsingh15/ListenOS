@@ -141,27 +141,11 @@ pub fn run() {
                     let shortcut_str = shortcut.to_string();
                     log::info!("Global shortcut event: {} - {:?}", shortcut_str, event.state);
                     
-                    // Emit events to the assistant window (always running in background)
+                    // Emit events to the assistant window (always visible pill)
                     if let Some(assistant) = app.get_webview_window("assistant") {
                         if event.state == ShortcutState::Pressed {
-                            log::info!("Hotkey pressed - showing assistant");
-                            
-                            // Ensure transparency when showing
-                            #[cfg(target_os = "windows")]
-                            {
-                                use tauri::webview::Color;
-                                let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
-                            }
-                            
-                            #[cfg(target_os = "macos")]
-                            {
-                                // macOS: Set window level and transparency
-                                use tauri::webview::Color;
-                                let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
-                            }
-                            
-                            let _ = assistant.show();
-                            // Don't steal focus - let user keep typing in their active app
+                            log::info!("Hotkey pressed - activating assistant");
+                            // Just emit the event, window is always visible
                             let _ = assistant.emit("shortcut-pressed", ());
                         } else if event.state == ShortcutState::Released {
                             log::info!("Ctrl+Space released - processing");
@@ -209,6 +193,7 @@ pub fn run() {
             commands::start_listening,
             commands::stop_listening,
             commands::get_status,
+            commands::get_audio_level,
             // Actions
             commands::type_text,
             commands::run_system_command,
@@ -305,10 +290,10 @@ pub fn run() {
                 });
             }
 
-            // Assistant: Start hidden, set transparent background, will show on hotkey
+            // Assistant: Always visible pill, transparent background
             if let Some(assistant) = app.get_webview_window("assistant") {
-                // Make the window click-through so clicks go to the app behind it
-                let _ = assistant.set_ignore_cursor_events(true);
+                // Don't set ignore cursor events - we want hover to work
+                // let _ = assistant.set_ignore_cursor_events(true);
 
                 // Set WebView background to transparent (RGBA with 0 alpha)
                 #[cfg(target_os = "windows")]
@@ -323,8 +308,9 @@ pub fn run() {
                     let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                 }
                 
-                let _ = assistant.hide();
-                log::info!("Assistant window initialized (hidden, transparent, click-through)");
+                // Show the assistant pill (always visible)
+                let _ = assistant.show();
+                log::info!("Assistant pill initialized (always visible, transparent)");
             }
 
             // Start clipboard monitoring in background with auto-correction learning

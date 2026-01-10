@@ -19,15 +19,26 @@ interface ProcessRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    // Check for API key auth (desktop app) or Clerk auth (web)
+    // Check for API key auth (desktop app) first
     const apiKey = request.headers.get("X-API-Key");
-    const { userId } = await auth();
-    
-    // Allow if either API key matches or user is authenticated via Clerk
     const validApiKey = process.env.LISTENOS_API_KEY || "listenos-desktop-app";
-    const isAuthorized = apiKey === validApiKey || userId;
+    
+    // If valid API key provided, skip Clerk auth entirely
+    let isAuthorized = apiKey === validApiKey;
+    
+    // Only check Clerk auth if no valid API key
+    if (!isAuthorized) {
+      try {
+        const { userId } = await auth();
+        isAuthorized = !!userId;
+      } catch {
+        // Clerk auth failed, that's ok if we have API key
+        isAuthorized = false;
+      }
+    }
     
     if (!isAuthorized) {
+      console.log("Auth failed - apiKey:", apiKey, "validApiKey:", validApiKey);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -189,61 +200,59 @@ function buildSystemPrompt(
   const os = context?.os || "unknown";
   const mode = context?.mode || "command";
 
-  let prompt = `You are ListenOS, an AI voice assistant that converts spoken commands into executable actions.
+  let prompt = `You are ListenOS, a voice assistant. Determine if the user wants to execute a COMMAND or just TYPE text.
 
-CURRENT CONTEXT:
-- Operating System: ${os}
+CONTEXT:
+- OS: ${os}
 - Mode: ${mode}
 - Active App: ${context?.active_app || "unknown"}
 
-AVAILABLE ACTIONS (respond with JSON):
-1. TypeText - Type text into active window
-   {"action": "type_text", "refined_text": "cleaned up text to type"}
+ACTIONS (respond with JSON):
 
-2. OpenApp - Open an application
+1. TypeText - Type/dictate text into active window
+   {"action": "type_text", "refined_text": "text to type"}
+   USE FOR: messages, sentences, greetings being typed (not commands)
+
+2. OpenApp - Open an application  
    {"action": "open_app", "app": "app_name"}
+   TRIGGERS: "open [app]", "launch [app]", "start [app]"
 
-3. OpenUrl - Open a URL in browser
+3. OpenUrl - Open URL in browser
    {"action": "open_url", "url": "https://..."}
+   TRIGGERS: "open youtube", "go to gmail", "open netflix"
 
 4. WebSearch - Search the web
    {"action": "web_search", "query": "search terms"}
+   TRIGGERS: "search for [x]", "google [x]", "look up [x]"
 
-5. VolumeControl - Control system volume
+5. VolumeControl - System volume
    {"action": "volume_control", "direction": "up|down|mute"}
+   TRIGGERS: "volume up/down", "mute", "louder", "quieter"
 
 6. SystemControl - System actions
-   {"action": "system_control", "system_action": "lock|sleep|screenshot|shutdown|restart"}
+   {"action": "system_control", "system_action": "lock|sleep|screenshot"}
+   TRIGGERS: "lock computer", "take screenshot", "sleep"
 
 7. SpotifyControl - Media control
    {"action": "spotify_control", "media_action": "play_pause|next|previous"}
-
-8. Respond - Answer a question conversationally
-   {"action": "respond", "response": "your answer here"}
-
-9. NoAction - When no action is needed
-   {"action": "no_action"}
+   TRIGGERS: "play", "pause", "next song", "previous"
 `;
 
   if (customCommands && customCommands.length > 0) {
-    prompt += `\n\nCUSTOM COMMANDS (user-defined):\n`;
+    prompt += `\nCUSTOM COMMANDS:\n`;
     customCommands.forEach((cmd) => {
-      prompt += `- "${cmd.trigger}" -> Execute command "${cmd.name}" (id: ${cmd.id})\n`;
+      prompt += `- "${cmd.trigger}" -> command "${cmd.name}" (id: ${cmd.id})\n`;
     });
   }
 
-  if (dictationStyle) {
-    prompt += `\n\nDICTATION STYLE: ${dictationStyle}`;
-    if (dictationStyle === "casual" || dictationStyle === "very_casual") {
-      prompt += " - Use less formal punctuation and capitalization";
-    }
-  }
-
-  prompt += `\n\nRULES:
-1. For dictation mode or unclear intent, use TypeText with cleaned-up text
-2. For questions about facts/knowledge, use Respond
-3. For app/system commands, use the appropriate action
-4. Always respond with valid JSON`;
+  prompt += `
+RULES:
+1. "open youtube/gmail/netflix" = OpenUrl (web apps)
+2. "open chrome/notepad/vscode" = OpenApp (desktop apps)
+3. "hello", "how are you", sentences = TypeText (dictation)
+4. Explicit commands with trigger words = appropriate action
+5. When in doubt, TypeText
+6. Always respond with valid JSON`;
 
   return prompt;
 }
@@ -260,9 +269,7 @@ function parseLLMResponse(parsed: Record<string, unknown>, originalText: string)
     volume_control: "VolumeControl",
     system_control: "SystemControl",
     spotify_control: "SpotifyControl",
-    respond: "Respond",
-    no_action: "NoAction",
-    clarify: "Clarify",
+    no_action: "TypeText",
   };
 
   const actionType = actionMap[action] || "TypeText";
@@ -270,7 +277,6 @@ function parseLLMResponse(parsed: Record<string, unknown>, originalText: string)
   // Build payload based on action type
   let payload: Record<string, unknown> = {};
   let refinedText: string | null = null;
-  let responseText: string | null = null;
 
   switch (actionType) {
     case "TypeText":
@@ -294,17 +300,13 @@ function parseLLMResponse(parsed: Record<string, unknown>, originalText: string)
     case "SpotifyControl":
       payload = { action: parsed.media_action || "play_pause" };
       break;
-    case "Respond":
-    case "Clarify":
-      responseText = (parsed.response as string) || (parsed.message as string) || "";
-      break;
   }
 
   return {
     action_type: actionType,
     payload,
     refined_text: refinedText,
-    response_text: responseText,
+    response_text: null,
     requires_confirmation: false,
   };
 }
