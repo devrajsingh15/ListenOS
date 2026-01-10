@@ -573,6 +573,7 @@ async fn dismiss_all_errors(state: tauri::State<'_, AppState>) -> Result<(), Str
 /// Call this when user types something different right after voice input
 #[tauri::command]
 async fn learn_correction(
+    app: AppHandle,
     state: tauri::State<'_, AppState>,
     corrected_text: String
 ) -> Result<Vec<String>, String> {
@@ -587,8 +588,13 @@ async fn learn_correction(
         // Add the corrected word to dictionary (if not already there)
         if !store.word_exists(&corrected)? {
             store.add_word(corrected.clone(), true)?;
-            learned.push(corrected);
-            log::info!("Auto-learned word from correction: {} -> {}", original, learned.last().unwrap());
+            learned.push(corrected.clone());
+            log::info!("Auto-learned word from correction: {} -> {}", original, corrected);
+            
+            // Emit event to frontend for notification
+            if let Some(assistant) = app.get_webview_window("assistant") {
+                let _ = assistant.emit("word-learned", serde_json::json!({ "word": corrected }));
+            }
         }
     }
     
