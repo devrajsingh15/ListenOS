@@ -2,8 +2,11 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 
-// API configuration
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+// API configuration - use production URL in builds, localhost for dev
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 
+  (process.env.NODE_ENV === "production" 
+    ? "https://server-c6vdxgsxi-devrajsingh15s-projects.vercel.app"
+    : "http://localhost:3001");
 
 // Storage keys
 const STORAGE_KEY_USER = "listenos_user";

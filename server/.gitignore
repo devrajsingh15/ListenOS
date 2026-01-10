@@ -25,3 +25,4 @@ Thumbs.db
 
 # Drizzle
 drizzle/meta/_journal.json
+.vercel
