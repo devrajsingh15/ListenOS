@@ -38,19 +38,13 @@ export default clerkMiddleware(async (auth, request) => {
   // For desktop API routes, check for either Clerk auth or API key
   if (isDesktopApiRoute(request)) {
     const apiKey = request.headers.get("X-API-Key");
-    const authHeader = request.headers.get("Authorization");
     
-    // If API key is provided, validate it (for desktop app without Clerk)
+    // If API key is provided, bypass Clerk auth (let route handler validate)
     if (apiKey) {
-      // In production, validate against stored API keys
-      // For now, allow if key is present
-      return;
+      return NextResponse.next();
     }
     
-    // Otherwise, require Clerk auth
-    if (!authHeader) {
-      // Let Clerk handle auth
-    }
+    // Otherwise, require Clerk auth (will be checked by route handler)
   }
 });
 
