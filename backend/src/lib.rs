@@ -278,6 +278,46 @@ pub fn run() {
             // Setup tray icon
             setup_tray(app)?;
 
+            // Check for updates on startup
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Wait a bit before checking for updates
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                
+                log::info!("Checking for updates...");
+                match tauri_plugin_updater::UpdaterExt::updater(&app_handle).check().await {
+                    Ok(Some(update)) => {
+                        log::info!("Update available: {} -> {}", update.current_version, update.version);
+                        // Notify the user via the dashboard window
+                        if let Some(dashboard) = app_handle.get_webview_window("dashboard") {
+                            let _ = dashboard.emit("update-available", serde_json::json!({
+                                "current": update.current_version,
+                                "new": update.version,
+                            }));
+                        }
+                        
+                        // Auto-download and install
+                        match update.download_and_install(|_, _| {}, || {}).await {
+                            Ok(_) => {
+                                log::info!("Update downloaded and installed, will apply on restart");
+                                if let Some(dashboard) = app_handle.get_webview_window("dashboard") {
+                                    let _ = dashboard.emit("update-ready", ());
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Failed to download/install update: {}", e);
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        log::info!("No updates available");
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to check for updates: {}", e);
+                    }
+                }
+            });
+
             // Dashboard: Hide to tray on close (don't quit app)
             if let Some(dashboard) = app.get_webview_window("dashboard") {
                 let dashboard_clone = dashboard.clone();
