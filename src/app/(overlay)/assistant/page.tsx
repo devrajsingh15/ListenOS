@@ -233,8 +233,8 @@ export default function AssistantPage() {
         }}
         initial={false}
         animate={{
-          width: state === "handsfree" ? 180 : (state === "listening" || state === "processing" ? 140 : 70),
-          height: 32,
+          width: state === "handsfree" ? 140 : (state === "listening" || state === "processing" ? 100 : 44),
+          height: state === "idle" ? 20 : 24,
           boxShadow: isActive 
             ? "0 4px 20px rgba(0,0,0,0.4)" 
             : "0 2px 10px rgba(0,0,0,0.3)",
@@ -263,44 +263,50 @@ function IdlePill() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="flex items-center justify-center gap-[4px] px-4"
+      className="flex items-center justify-center gap-[3px] px-2"
     >
-      {[...Array(10)].map((_, i) => (
-        <div key={i} className="w-[4px] h-[4px] rounded-full" style={{ background: "rgba(255,255,255,0.35)" }} />
+      {[...Array(6)].map((_, i) => (
+        <div key={i} className="w-[3px] h-[3px] rounded-full" style={{ background: "rgba(255,255,255,0.4)" }} />
       ))}
     </motion.div>
   );
 }
 
 function ListeningWave({ level }: { level: number }) {
+  const normalizedLevel = Math.max(0.15, level); // Minimum animation even when quiet
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-3">
-      {[...Array(12)].map((_, i) => {
-        const centerDist = Math.abs(i - 5.5) / 5.5;
-        const height = 4 + (20 - 4) * level * (1 - centerDist * 0.5) * (0.7 + Math.random() * 0.6);
-        return <motion.div key={i} className="w-[3px] rounded-full bg-white" animate={{ height }} transition={{ duration: 0.05 }} />;
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-2">
+      {[...Array(8)].map((_, i) => {
+        const centerDist = Math.abs(i - 3.5) / 3.5;
+        const baseHeight = 3;
+        const maxHeight = 14;
+        const height = baseHeight + (maxHeight - baseHeight) * normalizedLevel * (1 - centerDist * 0.4) * (0.6 + Math.random() * 0.4);
+        return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400" animate={{ height }} transition={{ duration: 0.05 }} />;
       })}
     </motion.div>
   );
 }
 
 function HandsfreePill({ level, onCancel, onStop }: { level: number; onCancel: () => void; onStop: () => void }) {
+  const normalizedLevel = Math.max(0.15, level); // Minimum animation
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-between w-full px-2">
-      <button onClick={(e) => { e.stopPropagation(); onCancel(); }} className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors">
-        <svg className="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-between w-full px-1">
+      <button onClick={(e) => { e.stopPropagation(); onCancel(); }} className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors">
+        <svg className="w-3 h-3 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      <div className="flex items-center justify-center gap-[2px] flex-1 mx-2">
-        {[...Array(10)].map((_, i) => {
-          const centerDist = Math.abs(i - 4.5) / 4.5;
-          const height = 4 + (18 - 4) * level * (1 - centerDist * 0.5) * (0.7 + Math.random() * 0.6);
-          return <motion.div key={i} className="w-[3px] rounded-full bg-white" animate={{ height }} transition={{ duration: 0.05 }} />;
+      <div className="flex items-center justify-center gap-[2px] flex-1 mx-1">
+        {[...Array(8)].map((_, i) => {
+          const centerDist = Math.abs(i - 3.5) / 3.5;
+          const baseHeight = 3;
+          const maxHeight = 12;
+          const height = baseHeight + (maxHeight - baseHeight) * normalizedLevel * (1 - centerDist * 0.4) * (0.6 + Math.random() * 0.4);
+          return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400" animate={{ height }} transition={{ duration: 0.05 }} />;
         })}
       </div>
-      <button onClick={(e) => { e.stopPropagation(); onStop(); }} className="w-7 h-7 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors">
-        <div className="w-3 h-3 rounded-sm bg-white" />
+      <button onClick={(e) => { e.stopPropagation(); onStop(); }} className="w-5 h-5 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors">
+        <div className="w-2 h-2 rounded-sm bg-white" />
       </button>
     </motion.div>
   );
@@ -308,9 +314,9 @@ function HandsfreePill({ level, onCancel, onStop }: { level: number; onCancel: (
 
 function ProcessingPill() {
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[3px] px-3">
-      {[...Array(9)].map((_, i) => (
-        <motion.div key={i} className="w-[3px] rounded-full bg-white/60" animate={{ height: [3, 8, 3] }} transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.05 }} />
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-2">
+      {[...Array(6)].map((_, i) => (
+        <motion.div key={i} className="w-[2px] rounded-full bg-white/60" animate={{ height: [3, 8, 3] }} transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.06 }} />
       ))}
     </motion.div>
   );
@@ -318,22 +324,21 @@ function ProcessingPill() {
 
 function SuccessPill({ feedback }: { feedback: string | null }) {
   return (
-    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-2 px-3">
-      <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-1 px-2">
+      <svg className="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
       </svg>
-      {feedback && <span className="text-xs text-white/90 truncate max-w-24">{feedback}</span>}
+      {feedback && <span className="text-[10px] text-white/90 truncate max-w-16">{feedback}</span>}
     </motion.div>
   );
 }
 
 function ErrorPill() {
   return (
-    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-2 px-3">
-      <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-1 px-2">
+      <svg className="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
       </svg>
-      <span className="text-xs text-white/80">Failed</span>
     </motion.div>
   );
 }
