@@ -1,16 +1,25 @@
-name: "macOS Compatibility"
+name: "Build macOS DMG"
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+concurrency:
+  group: macos-dmg-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  macos-dmg-build-and-verify:
+  build-macos-dmg:
     runs-on: macos-latest
     timeout-minutes: 45
+    env:
+      CI: "true"
+      RUST_BACKTRACE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -19,43 +28,60 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install frontend dependencies
-        run: npm install
+      - name: Cache Cargo registry and build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: macos-cargo-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            macos-cargo-${{ runner.os }}-
 
-      - name: Build Next.js frontend
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
         run: npm run build
 
       - name: Build macOS DMG
-        run: npm run tauri:build:mac:dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-logs
+          npm run tauri:build:mac:dmg 2>&1 | tee .ci-logs/tauri-build.log
 
       - name: Locate DMG
+        id: locate_dmg
         shell: bash
         run: |
           set -euo pipefail
           DMG_PATH="$(find backend/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' | head -n 1)"
           if [[ -z "${DMG_PATH}" ]]; then
-            echo "No DMG file found in backend/target/release/bundle/dmg"
+            echo "No DMG file found in backend/target/release/bundle/dmg" | tee -a .ci-logs/tauri-build.log
             exit 1
           fi
-          echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
+          echo "dmg_path=${DMG_PATH}" >> "$GITHUB_OUTPUT"
           echo "Found DMG: ${DMG_PATH}"
 
-      - name: Verify DMG image integrity
+      - name: Verify DMG integrity
         shell: bash
         run: |
           set -euo pipefail
-          hdiutil verify "${DMG_PATH}"
+          hdiutil verify "${{ steps.locate_dmg.outputs.dmg_path }}"
 
       - name: Mount DMG and verify app bundle
         shell: bash
         run: |
           set -euo pipefail
           MOUNT_POINT="$(mktemp -d /tmp/listenos-dmg.XXXXXX)"
-          hdiutil attach "${DMG_PATH}" -mountpoint "${MOUNT_POINT}" -nobrowse -quiet
+          hdiutil attach "${{ steps.locate_dmg.outputs.dmg_path }}" -mountpoint "${MOUNT_POINT}" -nobrowse -quiet
           test -d "${MOUNT_POINT}/ListenOS.app"
           hdiutil detach "${MOUNT_POINT}" -quiet
           rm -rf "${MOUNT_POINT}"
@@ -63,5 +89,35 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: listenos-macos-dmg
-          path: ${{ env.DMG_PATH }}
+          name: listenos-macos-dmg-${{ github.run_number }}
+          path: ${{ steps.locate_dmg.outputs.dmg_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: listenos-macos-build-logs-${{ github.run_number }}
+          path: .ci-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Debug bundle directory on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Bundle directory listing:"
+          ls -R backend/target/release/bundle || true
+
+      - name: Workflow summary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## macOS DMG build succeeded"
+            echo ""
+            echo "- DMG path: \`${{ steps.locate_dmg.outputs.dmg_path }}\`"
+            echo "- Artifact: \`listenos-macos-dmg-${{ github.run_number }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
