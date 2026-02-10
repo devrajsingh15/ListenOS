@@ -148,7 +148,12 @@ impl ApiClient {
     }
 
     /// Transcribe audio using the backend API
-    pub async fn transcribe(&self, audio_data: &[u8], hints: Option<&[String]>) -> Result<TranscriptionResponse, String> {
+    pub async fn transcribe(
+        &self,
+        audio_data: &[u8],
+        hints: Option<&[String]>,
+        language: Option<&str>,
+    ) -> Result<TranscriptionResponse, String> {
         let url = format!("{}/api/voice/transcribe", self.config.base_url);
         
         // Build multipart form
@@ -162,6 +167,12 @@ impl ApiClient {
         
         if let Some(hints) = hints {
             form = form.text("hints", hints.join(", "));
+        }
+        if let Some(language) = language {
+            let lang = language.trim();
+            if !lang.is_empty() && lang.to_lowercase() != "auto" {
+                form = form.text("language", lang.to_string());
+            }
         }
         
         // Build request with auth

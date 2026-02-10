@@ -1310,9 +1310,18 @@ impl AppIntegration for SystemControlsIntegration {
             "system_screenshot" => {
                 let path = params.get("path").and_then(|v| v.as_str());
                 let saved_path = Self::take_screenshot(path)?;
+                let screenshot_dir = Path::new(&saved_path)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .ok_or_else(|| "Could not resolve screenshot directory".to_string())?;
+                Self::open_folder_in_file_manager(&screenshot_dir)?;
                 Ok(IntegrationResult::success_with_data(
-                    format!("Screenshot saved to {}", saved_path),
-                    serde_json::json!({ "path": saved_path }),
+                    "Screenshot taken and saved.".to_string(),
+                    serde_json::json!({
+                        "path": saved_path,
+                        "folder": screenshot_dir.to_string_lossy().to_string(),
+                        "folder_opened": true
+                    }),
                 ))
             }
 
@@ -1320,7 +1329,7 @@ impl AppIntegration for SystemControlsIntegration {
                 let screenshots_dir = Self::screenshots_dir()?;
                 Self::open_folder_in_file_manager(&screenshots_dir)?;
                 Ok(IntegrationResult::success_with_data(
-                    format!("Opened screenshots folder: {}", screenshots_dir.display()),
+                    "Opened screenshots folder.".to_string(),
                     serde_json::json!({ "path": screenshots_dir.to_string_lossy().to_string() }),
                 ))
             }

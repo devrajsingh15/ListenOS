@@ -3,7 +3,15 @@
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { isTauri, getAutostartEnabled, setAutostartEnabled } from "@/lib/tauri";
+import {
+  isTauri,
+  getAutostartEnabled,
+  setAutostartEnabled,
+  getTriggerHotkey,
+  setTriggerHotkey,
+  getLanguagePreferences,
+  setLanguagePreferences,
+} from "@/lib/tauri";
 import { checkForUpdates } from "@/lib/updater";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -56,6 +64,29 @@ const settingsNavItems: SettingsNavItem[] = [
 ];
 
 const APP_VERSION = "0.1.0";
+
+const SOURCE_LANGUAGE_OPTIONS = [
+  { value: "auto", label: "Auto Detect" },
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "it", label: "Italian" },
+  { value: "pt", label: "Portuguese" },
+  { value: "ru", label: "Russian" },
+  { value: "zh", label: "Chinese" },
+  { value: "ja", label: "Japanese" },
+  { value: "ko", label: "Korean" },
+  { value: "ar", label: "Arabic" },
+];
+
+const TARGET_LANGUAGE_OPTIONS = SOURCE_LANGUAGE_OPTIONS.filter((option) => option.value !== "auto");
+
+function getLanguageLabel(code: string, source = false): string {
+  const options = source ? SOURCE_LANGUAGE_OPTIONS : TARGET_LANGUAGE_OPTIONS;
+  return options.find((option) => option.value === code)?.label ?? code;
+}
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
@@ -172,7 +203,8 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   // Local state for system settings
   const [startOnLogin, setStartOnLogin] = useState(settings?.startOnLogin ?? false);
   const [showInTray, setShowInTray] = useState(settings?.showInTray ?? true);
-  const [language, setLanguage] = useState(settings?.language ?? "en");
+  const [sourceLanguage, setSourceLanguage] = useState("en");
+  const [targetLanguage, setTargetLanguage] = useState(settings?.language ?? "en");
   const [autostartLoading, setAutostartLoading] = useState(false);
 
   // Load actual autostart state on mount
@@ -181,6 +213,17 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       getAutostartEnabled()
         .then((enabled) => setStartOnLogin(enabled))
         .catch((err) => console.error("Failed to get autostart status:", err));
+
+      getTriggerHotkey()
+        .then((hotkey) => setCurrentShortcut(hotkey))
+        .catch((err) => console.error("Failed to get current hotkey:", err));
+
+      getLanguagePreferences()
+        .then((prefs) => {
+          setSourceLanguage(prefs.source_language);
+          setTargetLanguage(prefs.target_language);
+        })
+        .catch((err) => console.error("Failed to get language preferences:", err));
     }
   }, []);
 
@@ -188,7 +231,12 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   useEffect(() => {
     if (settings) {
       setShowInTray(settings.showInTray);
-      setLanguage(settings.language);
+      if (!isTauri()) {
+        setTargetLanguage(settings.language);
+      }
+      if (settings.hotkey) {
+        setCurrentShortcut(settings.hotkey);
+      }
     }
   }, [settings]);
 
@@ -238,9 +286,62 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     await updateSettings({ showInTray: checked });
   }, [updateSettings]);
 
-  const handleLanguageChange = useCallback(async (newLanguage: string) => {
-    setLanguage(newLanguage);
-    await updateSettings({ language: newLanguage });
+  const handleSourceLanguageChange = useCallback(async (newLanguage: string) => {
+    const previousSource = sourceLanguage;
+    const previousTarget = targetLanguage;
+    setSourceLanguage(newLanguage);
+
+    if (isTauri()) {
+      try {
+        const updated = await setLanguagePreferences(newLanguage, targetLanguage);
+        setSourceLanguage(updated.source_language);
+        setTargetLanguage(updated.target_language);
+      } catch (err) {
+        console.error("Failed to set source language:", err);
+        setSourceLanguage(previousSource);
+        setTargetLanguage(previousTarget);
+        setUpdateStatus("Failed to update source language");
+      }
+      return;
+    }
+  }, [sourceLanguage, targetLanguage]);
+
+  const handleTargetLanguageChange = useCallback(async (newLanguage: string) => {
+    const previousSource = sourceLanguage;
+    const previousTarget = targetLanguage;
+    setTargetLanguage(newLanguage);
+
+    if (isTauri()) {
+      try {
+        const updated = await setLanguagePreferences(sourceLanguage, newLanguage);
+        setSourceLanguage(updated.source_language);
+        setTargetLanguage(updated.target_language);
+        await updateSettings({ language: updated.target_language });
+      } catch (err) {
+        console.error("Failed to set target language:", err);
+        setSourceLanguage(previousSource);
+        setTargetLanguage(previousTarget);
+        setUpdateStatus("Failed to update target language");
+      }
+      return;
+    }
+    try {
+      await updateSettings({ language: newLanguage });
+    } catch (err) {
+      console.error("Failed to sync target language setting:", err);
+    }
+  }, [sourceLanguage, targetLanguage, updateSettings]);
+
+  const applyShortcut = useCallback(async (rawShortcut: string) => {
+    if (isTauri()) {
+      const normalized = await setTriggerHotkey(rawShortcut);
+      setCurrentShortcut(normalized);
+      await updateSettings({ hotkey: normalized });
+      return;
+    }
+
+    setCurrentShortcut(rawShortcut);
+    await updateSettings({ hotkey: rawShortcut });
   }, [updateSettings]);
 
   const handleShortcutRecord = useCallback(() => {
@@ -256,15 +357,32 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       
       // Add the actual key if it's not a modifier
       if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
-        keys.push(e.key === ' ' ? 'Space' : e.key.charAt(0).toUpperCase() + e.key.slice(1));
+        const keyMap: Record<string, string> = {
+          " ": "Space",
+          ArrowUp: "Up",
+          ArrowDown: "Down",
+          ArrowLeft: "Left",
+          ArrowRight: "Right",
+          Escape: "Esc",
+          Enter: "Enter",
+          Tab: "Tab",
+        };
+        const normalizedKey = keyMap[e.key] ||
+          (e.key.length === 1
+            ? e.key.toUpperCase()
+            : e.key.charAt(0).toUpperCase() + e.key.slice(1));
+        keys.push(normalizedKey);
       }
       
       if (keys.length >= 2) {
         const shortcut = keys.join('+');
-        setCurrentShortcut(shortcut);
         setIsRecordingShortcut(false);
-        updateSettings({ hotkey: shortcut });
         document.removeEventListener('keydown', handleKeyDown);
+
+        void applyShortcut(shortcut).catch((err) => {
+          console.error("Failed to apply shortcut:", err);
+          setUpdateStatus("Failed to update shortcut");
+        });
       }
     };
     
@@ -275,7 +393,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       setIsRecordingShortcut(false);
       document.removeEventListener('keydown', handleKeyDown);
     }, 5000);
-  }, [updateSettings]);
+  }, [applyShortcut]);
 
   switch (section) {
     case "general":
@@ -310,20 +428,36 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               }
             />
             <SettingsRow
-              label="Languages"
-              description={language === "en" ? "English" : language}
+              label="Source language"
+              description={getLanguageLabel(sourceLanguage, true)}
               action={
                 <select
-                  value={language}
-                  onChange={(e) => handleLanguageChange(e.target.value)}
+                  value={sourceLanguage}
+                  onChange={(e) => void handleSourceLanguageChange(e.target.value)}
                   className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover"
                 >
-                  <option value="en">English</option>
-                  <option value="es">Spanish</option>
-                  <option value="fr">French</option>
-                  <option value="de">German</option>
-                  <option value="zh">Chinese</option>
-                  <option value="ja">Japanese</option>
+                  {SOURCE_LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+            <SettingsRow
+              label="Target language"
+              description={getLanguageLabel(targetLanguage)}
+              action={
+                <select
+                  value={targetLanguage}
+                  onChange={(e) => void handleTargetLanguageChange(e.target.value)}
+                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover"
+                >
+                  {TARGET_LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               }
             />

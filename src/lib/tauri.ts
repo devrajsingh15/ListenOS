@@ -128,6 +128,39 @@ export async function getAudioLevel(): Promise<number> {
   return invoke("get_audio_level");
 }
 
+// ============ Config Commands ============
+
+export async function getTriggerHotkey(): Promise<string> {
+  return invoke("get_trigger_hotkey");
+}
+
+export async function setTriggerHotkey(hotkey: string): Promise<string> {
+  return invoke("set_trigger_hotkey", { hotkey });
+}
+
+export interface LanguagePreferences {
+  source_language: string;
+  target_language: string;
+}
+
+export async function getLanguagePreferences(): Promise<LanguagePreferences> {
+  return invoke("get_language_preferences");
+}
+
+export async function setLanguagePreferences(
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<LanguagePreferences> {
+  return invoke("set_language_preferences", {
+    // Tauri command args in this app use camelCase in the invoke payload.
+    sourceLanguage,
+    targetLanguage,
+    // Keep snake_case aliases for compatibility across bridge behavior.
+    source_language: sourceLanguage,
+    target_language: targetLanguage,
+  });
+}
+
 // ============ Action Commands ============
 
 export async function typeText(text: string): Promise<{ success: boolean; message: string }> {

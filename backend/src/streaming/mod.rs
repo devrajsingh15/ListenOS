@@ -4,7 +4,7 @@
 //! Cross-platform support for Windows, macOS, and Linux.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU32, Ordering}};
 
 /// Audio chunk for streaming (100ms of audio at 16kHz = 1600 samples)
 #[allow(dead_code)]
@@ -18,6 +18,7 @@ pub struct AudioStreamer {
     is_recording: Arc<AtomicBool>,
     sample_rate: u32,
     accumulated_samples: Arc<Mutex<Vec<f32>>>,
+    live_level_bits: Arc<AtomicU32>,
     // Store stream handle to keep it alive
     stream_handle: Arc<Mutex<Option<StreamHandle>>>,
 }
@@ -37,6 +38,7 @@ impl AudioStreamer {
             is_recording: Arc::new(AtomicBool::new(false)),
             sample_rate: SAMPLE_RATE,
             accumulated_samples: Arc::new(Mutex::new(Vec::with_capacity(SAMPLE_RATE as usize * 30))),
+            live_level_bits: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             stream_handle: Arc::new(Mutex::new(None)),
         }
     }
@@ -51,11 +53,13 @@ impl AudioStreamer {
         if let Ok(mut samples) = self.accumulated_samples.lock() {
             samples.clear();
         }
+        self.live_level_bits.store(0.0_f32.to_bits(), Ordering::Relaxed);
 
         let (sender, receiver) = crossbeam_channel::unbounded::<Vec<f32>>();
         
         let is_recording = self.is_recording.clone();
         let accumulated = self.accumulated_samples.clone();
+        let live_level = self.live_level_bits.clone();
         let sample_rate = self.sample_rate;
         let stream_handle = self.stream_handle.clone();
 
@@ -99,7 +103,34 @@ impl AudioStreamer {
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 if !is_rec.load(Ordering::SeqCst) {
+                    live_level.store(0.0_f32.to_bits(), Ordering::Relaxed);
                     return;
+                }
+
+                if !data.is_empty() {
+                    let rms = (data.iter().map(|s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                    let peak = data
+                        .iter()
+                        .map(|s| s.abs())
+                        .fold(0.0_f32, |acc, value| acc.max(value));
+                    let active_ratio = data
+                        .iter()
+                        .filter(|sample| sample.abs() > 0.012)
+                        .count() as f32
+                        / data.len() as f32;
+
+                    let raw_level = if rms < 0.0012 && peak < 0.01 {
+                        0.0
+                    } else {
+                        ((rms * 12.0) + (peak * 1.8) + (active_ratio * 2.2))
+                            .clamp(0.0, 1.0)
+                            .powf(0.9)
+                    };
+
+                    // Light smoothing for stability without lag.
+                    let previous = f32::from_bits(live_level.load(Ordering::Relaxed));
+                    let smoothed = (previous * 0.22 + raw_level * 0.78).clamp(0.0, 1.0);
+                    live_level.store(smoothed.to_bits(), Ordering::Relaxed);
                 }
 
                 // Add to accumulated buffer (use try_lock to avoid blocking)
@@ -139,6 +170,7 @@ impl AudioStreamer {
     /// Stop streaming
     pub fn stop_streaming(&self) {
         self.is_recording.store(false, Ordering::SeqCst);
+        self.live_level_bits.store(0.0_f32.to_bits(), Ordering::Relaxed);
         
         // Drop the stream handle to stop recording
         if let Ok(mut handle) = self.stream_handle.lock() {
@@ -165,6 +197,12 @@ impl AudioStreamer {
         if let Ok(mut samples) = self.accumulated_samples.lock() {
             samples.clear();
         }
+        self.live_level_bits.store(0.0_f32.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Get current live audio level from the capture callback (0.0-1.0).
+    pub fn get_live_level(&self) -> f32 {
+        f32::from_bits(self.live_level_bits.load(Ordering::Relaxed)).clamp(0.0, 1.0)
     }
 }
 

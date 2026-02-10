@@ -454,11 +454,16 @@ impl GroqClient {
     /// 
     /// `dictionary_hints` - Optional list of custom words/names to help recognition
     pub async fn transcribe(&self, audio_data: &[u8]) -> Result<TranscriptionResult, String> {
-        self.transcribe_with_hints(audio_data, &[]).await
+        self.transcribe_with_hints(audio_data, &[], None).await
     }
     
     /// Transcribe audio with custom vocabulary hints
-    pub async fn transcribe_with_hints(&self, audio_data: &[u8], dictionary_hints: &[String]) -> Result<TranscriptionResult, String> {
+    pub async fn transcribe_with_hints(
+        &self,
+        audio_data: &[u8],
+        dictionary_hints: &[String],
+        language: Option<&str>,
+    ) -> Result<TranscriptionResult, String> {
         // Rate limiting disabled for testing
         // crate::rate_limit::check_stt_limit()?;
         
@@ -472,8 +477,14 @@ impl GroqClient {
         let mut form = Form::new()
             .part("file", audio_part)
             .text("model", "whisper-large-v3-turbo")
-            .text("response_format", "json")
-            .text("language", "en");
+            .text("response_format", "json");
+
+        if let Some(lang) = language {
+            let normalized = lang.trim().to_lowercase();
+            if !normalized.is_empty() && normalized != "auto" {
+                form = form.text("language", normalized);
+            }
+        }
         
         // Add dictionary hints as a prompt to improve recognition
         if !dictionary_hints.is_empty() {

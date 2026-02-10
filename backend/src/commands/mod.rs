@@ -8,6 +8,7 @@ pub mod custom;
 use crate::AppState;
 use crate::audio::AudioDevice;
 use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
+use crate::config::LanguagePreferences;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -77,6 +78,193 @@ pub struct PendingActionResponse {
     pub transcription: String,
     pub summary: String,
     pub created_at: String,
+}
+
+const SUPPORTED_SOURCE_LANGUAGES: &[&str] = &[
+    "auto", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko", "ar",
+];
+const SUPPORTED_TARGET_LANGUAGES: &[&str] = &[
+    "en", "hi", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko", "ar",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MultilingualRewrite {
+    routing_text_english: Option<String>,
+    output_text_target: Option<String>,
+    detected_language: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MultilingualTextResult {
+    routing_text: String,
+    output_text: String,
+    transformed: bool,
+}
+
+fn normalize_language_code(raw: &str, allow_auto: bool) -> String {
+    let mut code = raw.trim().to_lowercase();
+    if code.is_empty() {
+        code = if allow_auto { "auto" } else { "en" }.to_string();
+    }
+    if code == "zh-cn" || code == "zh-tw" {
+        code = "zh".to_string();
+    }
+
+    let allowed = if allow_auto {
+        SUPPORTED_SOURCE_LANGUAGES
+    } else {
+        SUPPORTED_TARGET_LANGUAGES
+    };
+
+    if allowed.contains(&code.as_str()) {
+        code
+    } else if allow_auto {
+        "auto".to_string()
+    } else {
+        "en".to_string()
+    }
+}
+
+fn normalized_language_preferences(preferences: &LanguagePreferences) -> LanguagePreferences {
+    LanguagePreferences {
+        source_language: normalize_language_code(&preferences.source_language, true),
+        target_language: normalize_language_code(&preferences.target_language, false),
+    }
+}
+
+fn language_name(code: &str) -> &str {
+    match code {
+        "auto" => "Auto-detect",
+        "en" => "English",
+        "hi" => "Hindi",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        "it" => "Italian",
+        "pt" => "Portuguese",
+        "ru" => "Russian",
+        "zh" => "Chinese",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "ar" => "Arabic",
+        _ => "Unknown",
+    }
+}
+
+fn should_run_multilingual_transform(
+    text: &str,
+    preferences: &LanguagePreferences,
+) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+
+    let source = preferences.source_language.as_str();
+    let target = preferences.target_language.as_str();
+
+    // Default fast path keeps existing behavior for English -> English.
+    if source == "en" && target == "en" {
+        return false;
+    }
+
+    // For multilingual mode, always run transform:
+    // - source != en
+    // - target != en
+    // - source auto (language detection required)
+    true
+}
+
+async fn transform_multilingual_text(
+    transcription_text: &str,
+    preferences: &LanguagePreferences,
+) -> Result<MultilingualTextResult, String> {
+    let base = transcription_text.trim();
+    if base.is_empty() {
+        return Ok(MultilingualTextResult {
+            routing_text: String::new(),
+            output_text: String::new(),
+            transformed: false,
+        });
+    }
+
+    if !should_run_multilingual_transform(base, preferences) {
+        return Ok(MultilingualTextResult {
+            routing_text: base.to_string(),
+            output_text: base.to_string(),
+            transformed: false,
+        });
+    }
+
+    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| cloud::get_groq_key());
+    if api_key.trim().is_empty() {
+        return Err("Missing GROQ_API_KEY for multilingual transform".to_string());
+    }
+
+    let source_code = preferences.source_language.as_str();
+    let target_code = preferences.target_language.as_str();
+    let source_name = language_name(source_code);
+    let target_name = language_name(target_code);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": "llama-3.3-70b-versatile",
+            "temperature": 0.1,
+            "max_tokens": 320,
+            "response_format": { "type": "json_object" },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You normalize multilingual voice transcriptions for an OS assistant. Return STRICT JSON with keys routing_text_english, output_text_target, detected_language. routing_text_english must be concise English preserving intent for command parsing. output_text_target must be polished in the requested target language with corrected grammar/punctuation and no extra commentary. If target language is English, output_text_target MUST be English. If source language is auto, detect language from the transcript; handle romanized speech (e.g., Hinglish written in Latin script) and still translate correctly."
+                },
+                {
+                    "role": "user",
+                    "content": format!(
+                        "source_language: {} ({})\ntarget_language: {} ({})\ntranscription: {}",
+                        source_code, source_name, target_code, target_name, base
+                    )
+                }
+            ]
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Multilingual transform request failed: {}", e))?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Multilingual transform failed [{}]: {}", status, body));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse multilingual transform response: {}", e))?;
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("{}")
+        .trim();
+
+    let rewrite: MultilingualRewrite = serde_json::from_str(content)
+        .map_err(|e| format!("Failed to parse multilingual rewrite payload: {}", e))?;
+
+    let routing = rewrite
+        .routing_text_english
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let output = rewrite
+        .output_text_target
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    Ok(MultilingualTextResult {
+        routing_text: if routing.is_empty() { base.to_string() } else { routing },
+        output_text: if output.is_empty() { base.to_string() } else { output },
+        transformed: true,
+    })
 }
 
 // ============ Core Voice Commands ============
@@ -174,14 +362,34 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         (accumulator.get_samples().to_vec(), accumulator.sample_rate())
     };
 
-    // Calculate RMS to detect silence (to filter hallucinations)
+    // Calculate audio energy metrics to detect true silence and avoid hallucinated text.
     let rms: f32 = if samples.is_empty() {
         0.0
     } else {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     };
+    let peak: f32 = samples
+        .iter()
+        .map(|s| s.abs())
+        .fold(0.0_f32, |acc, value| acc.max(value));
+    let active_sample_count = samples
+        .iter()
+        .filter(|sample| sample.abs() > 0.012)
+        .count();
+    let active_ratio = if samples.is_empty() {
+        0.0
+    } else {
+        active_sample_count as f32 / samples.len() as f32
+    };
     let duration_ms = (samples.len() as u64 * 1000) / sample_rate as u64;
-    log::info!("Audio captured: {} samples, {} ms, RMS: {:.4}", samples.len(), duration_ms, rms);
+    log::info!(
+        "Audio captured: {} samples, {} ms, RMS: {:.4}, peak: {:.4}, active_ratio: {:.4}",
+        samples.len(),
+        duration_ms,
+        rms,
+        peak,
+        active_ratio
+    );
 
     if samples.is_empty() || samples.len() < 1600 { // Less than 100ms
         let mut is_processing = state.is_processing.lock().await;
@@ -201,14 +409,27 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         Ok(store) => store.get_words_for_recognition().unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    let language_preferences = {
+        let config = state.config.lock().await;
+        normalized_language_preferences(&config.language_preferences)
+    };
+    let transcription_language_hint = language_preferences
+        .transcription_language_hint()
+        .map(|s| s.to_string());
 
     // Transcription strategy:
     // 1) Try backend API (recommended for centralized auth/rate policies)
     // 2) Fallback to direct Groq call if server is unavailable/misconfigured
-    let transcription = {
+    let mut transcription = {
         let server_transcription = if use_remote_api() {
             let api_client = state.api_client.lock().await;
-            api_client.transcribe(&wav_data, Some(&dictionary_hints)).await
+            api_client
+                .transcribe(
+                    &wav_data,
+                    Some(&dictionary_hints),
+                    transcription_language_hint.as_deref(),
+                )
+                .await
         } else {
             Err("remote API disabled".to_string())
         };
@@ -234,7 +455,14 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 }
 
                 let groq_client = GroqClient::new();
-                match groq_client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
+                match groq_client
+                    .transcribe_with_hints(
+                        &wav_data,
+                        &dictionary_hints,
+                        transcription_language_hint.as_deref(),
+                    )
+                    .await
+                {
                     Ok(result) => {
                         log::info!("Direct Groq fallback transcription succeeded");
                         TranscriptionResult {
@@ -267,9 +495,40 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     };
 
-    // Detect silence at audio level - filter Whisper hallucinations
-    // RMS < 0.002 means essentially silence (mic noise only)
-    let is_silent = rms < 0.002;
+    // Hard silence gate:
+    // If there is no meaningful audio energy, ignore transcription completely
+    // so random hallucinated text never gets pasted.
+    let is_low_signal = rms < 0.0028 && peak < 0.02 && active_ratio < 0.01;
+    if is_low_signal {
+        log::info!(
+            "No speech detected (low signal): rms={:.4}, peak={:.4}, active_ratio={:.4}, text='{}'",
+            rms,
+            peak,
+            active_ratio,
+            transcription.text
+        );
+        let mut is_processing = state.is_processing.lock().await;
+        *is_processing = false;
+        return Ok(VoiceProcessingResult {
+            transcription: TranscriptionResult {
+                text: String::new(),
+                duration_ms,
+                confidence: 0.0,
+                is_final: true,
+            },
+            action: ActionResultResponse {
+                action_type: "NoAction".to_string(),
+                payload: serde_json::json!({}),
+                refined_text: None,
+                response_text: None,
+                requires_confirmation: false,
+                pending_action_id: None,
+            },
+            executed: true,
+            response_text: None,
+            session_id: "silent".to_string(),
+        });
+    }
     
     // Also filter known Whisper hallucination phrases that appear on silence
     let hallucination_phrases = [
@@ -279,9 +538,27 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     ];
     let text_lower = transcription.text.trim().to_lowercase();
     let is_hallucination = hallucination_phrases.iter().any(|&p| text_lower == p);
+    let repetitive_noise = {
+        let words: Vec<&str> = text_lower
+            .split_whitespace()
+            .filter(|w| !w.is_empty())
+            .collect();
+        if words.len() < 8 {
+            false
+        } else {
+            let unique: std::collections::HashSet<&str> = words.iter().copied().collect();
+            unique.len() <= 2
+        }
+    };
 
-    if transcription.text.trim().is_empty() || (is_silent && is_hallucination) {
-        log::info!("No speech detected (RMS: {:.4}, text: '{}')", rms, transcription.text);
+    if transcription.text.trim().is_empty() || is_hallucination || repetitive_noise {
+        log::info!(
+            "No valid speech detected (RMS: {:.4}, text: '{}', hallucination: {}, repetitive: {})",
+            rms,
+            transcription.text,
+            is_hallucination,
+            repetitive_noise
+        );
         let mut is_processing = state.is_processing.lock().await;
         *is_processing = false;
         
@@ -305,6 +582,37 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
             response_text: None,
             session_id: "silent".to_string(),
         });
+    }
+
+    let multilingual = match transform_multilingual_text(&transcription.text, &language_preferences).await {
+        Ok(result) => result,
+        Err(err) => {
+            log::warn!("Multilingual transform skipped due to error: {}", err);
+            MultilingualTextResult {
+                routing_text: transcription.text.clone(),
+                output_text: transcription.text.clone(),
+                transformed: false,
+            }
+        }
+    };
+
+    let intent_text = if multilingual.routing_text.trim().is_empty() {
+        transcription.text.clone()
+    } else {
+        multilingual.routing_text.clone()
+    };
+    if !multilingual.output_text.trim().is_empty() {
+        transcription.text = multilingual.output_text.clone();
+    }
+
+    if multilingual.transformed {
+        log::info!(
+            "Multilingual transform applied: source={} target={} intent='{}' output='{}'",
+            language_preferences.source_language,
+            language_preferences.target_language,
+            intent_text,
+            transcription.text
+        );
     }
 
     // Get conversation context for multi-turn dialogues
@@ -391,10 +699,10 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         (ctx, conversation.session_id.clone())
     };
 
-    let local_router_action = cloud::detect_local_command(&transcription.text);
+    let local_router_action = cloud::detect_local_command(&intent_text);
 
-    let question_action = if local_router_action.is_none() && should_handle_as_question(&transcription.text, &context) {
-        match build_question_response_action(&transcription.text, &conv_context).await {
+    let question_action = if local_router_action.is_none() && should_handle_as_question(&intent_text, &context) {
+        match build_question_response_action(&intent_text, &conv_context).await {
             Ok(action) => {
                 log::info!("Question router selected local Q&A response");
                 Some(action)
@@ -426,7 +734,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         
         // Build request for server API
         let process_request = crate::api_client::ProcessRequest {
-            text: transcription.text.clone(),
+            text: intent_text.clone(),
             context: Some(crate::api_client::VoiceContext {
                 active_app: context.active_app.clone(),
                 selected_text: context.selected_text.clone(),
@@ -500,23 +808,23 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     };
 
     let mut action = if let Some(local_action) = local_router_action {
-        log::info!(
-            "Local router selected action {:?} for transcript '{}'",
-            local_action.action_type,
-            transcription.text
-        );
-        local_action
-    } else if let Some(question_action) = question_action {
-        question_action
-    } else if should_route_locally_first(&transcription.text, &context) {
-        if let Some(local_action) = cloud::detect_local_command(&transcription.text) {
             log::info!(
-                "Local router first selected action {:?} for transcript '{}'",
+                "Local router selected action {:?} for transcript '{}'",
                 local_action.action_type,
-                transcription.text
+                intent_text
             );
             local_action
-        } else {
+        } else if let Some(question_action) = question_action {
+            question_action
+        } else if should_route_locally_first(&intent_text, &context) {
+            if let Some(local_action) = cloud::detect_local_command(&intent_text) {
+                log::info!(
+                    "Local router first selected action {:?} for transcript '{}'",
+                    local_action.action_type,
+                    intent_text
+                );
+                local_action
+            } else {
             resolve_server_action().await
         }
     } else {
@@ -525,15 +833,19 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
 
     // Deterministic local router fallback.
     // If server returns dictation for an obvious command phrase, prefer local action routing.
-    if should_use_local_command_fallback(&transcription.text, &context, &action) {
-        if let Some(local_action) = cloud::detect_local_command(&transcription.text) {
+    if should_use_local_command_fallback(&intent_text, &context, &action) {
+        if let Some(local_action) = cloud::detect_local_command(&intent_text) {
             log::info!(
                 "Local router fallback selected action {:?} for transcript '{}'",
                 local_action.action_type,
-                transcription.text
+                intent_text
             );
             action = local_action;
         }
+    }
+
+    if multilingual.transformed && action.action_type == ActionType::TypeText {
+        action.refined_text = Some(transcription.text.clone());
     }
 
     let confirms_enabled = confirmations_enabled();
@@ -808,28 +1120,9 @@ pub async fn get_audio_level(state: State<'_, AppState>) -> Result<f32, String> 
     if !is_listening {
         return Ok(0.0);
     }
-    
-    let accumulator = state.accumulator.lock().await;
-    let samples = accumulator.get_samples();
-    
-    // Get the last ~50ms of audio for real-time level
-    let recent_samples = if samples.len() > 800 {
-        &samples[samples.len() - 800..]
-    } else {
-        samples
-    };
-    
-    if recent_samples.is_empty() {
-        return Ok(0.0);
-    }
-    
-    // Calculate RMS (root mean square) for audio level
-    let rms: f32 = (recent_samples.iter().map(|s| s * s).sum::<f32>() / recent_samples.len() as f32).sqrt();
-    
-    // Normalize to 0-1 range (typical speech RMS is 0.01-0.3)
-    let normalized = (rms * 5.0).min(1.0);
-    
-    Ok(normalized)
+
+    let streamer = state.streamer.lock().await;
+    Ok(streamer.get_live_level())
 }
 
 // ============ Audio Device Commands ============
@@ -2949,40 +3242,154 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<crate::config::App
     Ok(config.clone())
 }
 
+fn normalize_hotkey_string(raw: &str) -> Result<String, String> {
+    let cleaned = raw.trim();
+    if cleaned.is_empty() {
+        return Err("Hotkey cannot be empty".to_string());
+    }
+
+    let mut modifiers: Vec<String> = Vec::new();
+    let mut key: Option<String> = None;
+
+    for part in cleaned.split('+') {
+        let token = part.trim();
+        if token.is_empty() {
+            continue;
+        }
+
+        let lower = token.to_lowercase();
+        let normalized = match lower.as_str() {
+            "ctrl" | "control" => Some("Ctrl".to_string()),
+            "alt" | "option" => Some("Alt".to_string()),
+            "shift" => Some("Shift".to_string()),
+            "win" | "meta" | "super" | "cmd" | "command" => Some("Meta".to_string()),
+            "spacebar" | "space" => None,
+            _ => None,
+        };
+
+        if let Some(modifier) = normalized {
+            if !modifiers.contains(&modifier) {
+                modifiers.push(modifier);
+            }
+            continue;
+        }
+
+        if key.is_none() {
+            let normalized_key = if lower == "space" || lower == "spacebar" {
+                "Space".to_string()
+            } else {
+                let mut chars = token.chars();
+                match chars.next() {
+                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase()),
+                    None => continue,
+                }
+            };
+            key = Some(normalized_key);
+        }
+    }
+
+    let key = key.ok_or_else(|| "Hotkey must include a non-modifier key".to_string())?;
+    if modifiers.is_empty() {
+        return Err("Hotkey must include at least one modifier key".to_string());
+    }
+
+    let mut parts = modifiers;
+    parts.push(key);
+    Ok(parts.join("+"))
+}
+
+fn apply_global_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+    use std::str::FromStr;
+
+    let normalized = normalize_hotkey_string(hotkey)?;
+    let parsed = Shortcut::from_str(&normalized)
+        .map_err(|_| format!("Invalid hotkey format: '{}'", normalized))?;
+
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| format!("Failed to unregister previous shortcuts: {}", e))?;
+
+    app.global_shortcut()
+        .register(parsed)
+        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized, e))?;
+
+    log::info!("Registered global hotkey: {}", normalized);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn set_config(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::AppState>,
     config: crate::config::AppConfig,
 ) -> Result<bool, String> {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-    use std::str::FromStr;
+    let mut config = config;
+    config.trigger_hotkey = normalize_hotkey_string(&config.trigger_hotkey)?;
+    config.language_preferences = normalized_language_preferences(&config.language_preferences);
 
     let mut current_config = state.config.lock().await;
     
     // Check if hotkey changed
     if current_config.trigger_hotkey != config.trigger_hotkey {
-        let new_shortcut_str = &config.trigger_hotkey;
+        let new_shortcut_str = config.trigger_hotkey.clone();
         
         log::info!("Updating hotkey from '{}' to '{}'", current_config.trigger_hotkey, new_shortcut_str);
-
-        // Unregister all existing shortcuts to be safe
-        let _ = app.global_shortcut().unregister_all();
-        log::info!("Unregistered all previous shortcuts");
-
-        // Register new
-        if let Ok(new_shortcut) = Shortcut::from_str(new_shortcut_str) {
-            match app.global_shortcut().register(new_shortcut) {
-                Ok(_) => log::info!("Successfully registered new shortcut: {}", new_shortcut_str),
-                Err(e) => log::error!("Failed to register new shortcut: {}", e),
-            }
-        } else {
-            log::error!("Failed to parse new shortcut string: {}", new_shortcut_str);
-        }
+        apply_global_hotkey(&app, &new_shortcut_str)?;
     }
 
     *current_config = config;
+    if let Err(err) = current_config.language_preferences.save_to_disk() {
+        log::warn!("Failed to persist language preferences: {}", err);
+    }
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn get_trigger_hotkey(state: State<'_, AppState>) -> Result<String, String> {
+    let config = state.config.lock().await;
+    Ok(config.trigger_hotkey.clone())
+}
+
+#[tauri::command]
+pub async fn set_trigger_hotkey(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    hotkey: String,
+) -> Result<String, String> {
+    let normalized = normalize_hotkey_string(&hotkey)?;
+    apply_global_hotkey(&app, &normalized)?;
+
+    let mut config = state.config.lock().await;
+    config.trigger_hotkey = normalized.clone();
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn get_language_preferences(
+    state: State<'_, AppState>,
+) -> Result<LanguagePreferences, String> {
+    let config = state.config.lock().await;
+    Ok(normalized_language_preferences(&config.language_preferences))
+}
+
+#[tauri::command]
+pub async fn set_language_preferences(
+    state: State<'_, AppState>,
+    source_language: String,
+    target_language: String,
+) -> Result<LanguagePreferences, String> {
+    let normalized = LanguagePreferences {
+        source_language: normalize_language_code(&source_language, true),
+        target_language: normalize_language_code(&target_language, false),
+    };
+
+    let mut config = state.config.lock().await;
+    config.language_preferences = normalized.clone();
+    if let Err(err) = config.language_preferences.save_to_disk() {
+        log::warn!("Failed to persist language preferences: {}", err);
+    }
+    Ok(normalized)
 }
 
 // ============ Custom Commands ============

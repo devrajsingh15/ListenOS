@@ -23,7 +23,7 @@ mod error_log;
 mod api_client;
 
 use tauri::{
-    Emitter, Manager, AppHandle,
+    Emitter, Manager, AppHandle, PhysicalPosition, Position,
     tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent},
     menu::{Menu, MenuItem},
 };
@@ -45,6 +45,31 @@ pub use dictionary::{DictionaryWord, DictionaryStore};
 pub use correction::CorrectionTracker;
 pub use error_log::{ErrorLog, ErrorEntry, ErrorType};
 pub use api_client::{ApiClient, ApiConfig};
+
+fn center_assistant_horizontally(app: &tauri::AppHandle) {
+    if let Some(assistant) = app.get_webview_window("assistant") {
+        let monitor = assistant
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| assistant.primary_monitor().ok().flatten());
+
+        if let Some(monitor) = monitor {
+            let monitor_pos = monitor.position();
+            let monitor_size = monitor.size();
+            let window_size = assistant.outer_size().ok();
+            let window_width = window_size.map(|s| s.width as i32).unwrap_or(300);
+
+            let centered_x = monitor_pos.x + ((monitor_size.width as i32 - window_width) / 2);
+            let top_y = monitor_pos.y + 10;
+
+            let _ = assistant.set_position(Position::Physical(PhysicalPosition::new(
+                centered_x,
+                top_y,
+            )));
+        }
+    }
+}
 
 /// Global application state
 pub struct AppState {
@@ -98,9 +123,14 @@ impl Default for AppState {
             session_token: None,
         };
 
+        let mut app_config = AppConfig::default();
+        if let Some(saved_languages) = crate::config::LanguagePreferences::load_from_disk() {
+            app_config.language_preferences = saved_languages;
+        }
+
         Self {
             audio: Arc::new(Mutex::new(AudioState::default())),
-            config: Arc::new(Mutex::new(AppConfig::default())),
+            config: Arc::new(Mutex::new(app_config)),
             cloud_config: Arc::new(Mutex::new(CloudConfig::default())),
             streamer: Arc::new(Mutex::new(AudioStreamer::new())),
             accumulator: Arc::new(Mutex::new(AudioAccumulator::new(SAMPLE_RATE))),
@@ -209,6 +239,10 @@ pub fn run() {
             // Config
             commands::get_config,
             commands::set_config,
+            commands::get_trigger_hotkey,
+            commands::set_trigger_hotkey,
+            commands::get_language_preferences,
+            commands::set_language_preferences,
             // Conversation
             commands::get_conversation,
             commands::clear_conversation,
@@ -364,6 +398,9 @@ pub fn run() {
                     let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                 }
                 
+                // Place assistant overlay at top-center of the current monitor.
+                center_assistant_horizontally(&app.handle().clone());
+
                 // Show the assistant pill (always visible)
                 let _ = assistant.show();
                 log::info!("Assistant pill initialized (always visible, transparent)");

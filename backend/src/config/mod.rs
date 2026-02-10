@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use crate::ai::{WhisperConfig, LLMConfig, AIProvider};
+use std::path::PathBuf;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,65 @@ pub struct AppConfig {
     
     /// Dictation style settings per context
     pub dictation_style: DictationStyleConfig,
+
+    /// Speech input and output language preferences for multilingual mode
+    pub language_preferences: LanguagePreferences,
+}
+
+/// Multilingual language preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguagePreferences {
+    /// Input speech language ("auto", "en", "hi", etc.)
+    pub source_language: String,
+    /// Output text language ("en", "hi", etc.)
+    pub target_language: String,
+}
+
+impl LanguagePreferences {
+    /// Language hint to pass to STT (None means auto-detect).
+    pub fn transcription_language_hint(&self) -> Option<&str> {
+        let source = self.source_language.trim().to_lowercase();
+        if source.is_empty() || source == "auto" {
+            None
+        } else {
+            Some(self.source_language.as_str())
+        }
+    }
+
+    fn storage_path() -> Result<PathBuf, String> {
+        let data_dir = dirs_next::data_dir()
+            .ok_or_else(|| "Could not find data directory".to_string())?;
+        Ok(data_dir.join("ListenOS").join("language_preferences.json"))
+    }
+
+    pub fn load_from_disk() -> Option<Self> {
+        let path = Self::storage_path().ok()?;
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str::<Self>(&content).ok()
+    }
+
+    pub fn save_to_disk(&self) -> Result<(), String> {
+        let path = Self::storage_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create preferences directory: {}", e))?;
+        }
+
+        let payload = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize language preferences: {}", e))?;
+        std::fs::write(&path, payload)
+            .map_err(|e| format!("Failed to write language preferences: {}", e))?;
+        Ok(())
+    }
+}
+
+impl Default for LanguagePreferences {
+    fn default() -> Self {
+        Self {
+            source_language: "en".to_string(),
+            target_language: "en".to_string(),
+        }
+    }
 }
 
 /// Dictation style configuration
@@ -93,6 +153,7 @@ impl Default for AppConfig {
             sound_feedback: true,
             auto_start: true,
             dictation_style: DictationStyleConfig::default(),
+            language_preferences: LanguagePreferences::default(),
         }
     }
 }

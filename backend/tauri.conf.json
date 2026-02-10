@@ -28,7 +28,6 @@
         "url": "/assistant",
         "width": 300,
         "height": 70,
-        "x": 810,
         "y": 10,
         "resizable": false,
         "transparent": true,

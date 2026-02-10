@@ -67,18 +67,62 @@ export default function AssistantPage() {
   const [mounted, setMounted] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false);
+  const [rawAudioLevel, setRawAudioLevel] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [wavePhase, setWavePhase] = useState(0);
   const [showTooltip, setShowTooltip] = useState(false);
   const [notification, setNotification] = useState<NotificationType>(null);
   const [learnedWord, setLearnedWord] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const stateRef = useRef<AssistantState>("idle");
+  const rawAudioLevelRef = useRef(0);
+  const wavePhaseRef = useRef(0);
   const audioLevelInterval = useRef<NodeJS.Timeout | null>(null);
   const tooltipTimeout = useRef<NodeJS.Timeout | null>(null);
   const transcriptionCount = useRef(0);
 
   useEffect(() => { setMounted(true); }, []);
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { rawAudioLevelRef.current = rawAudioLevel; }, [rawAudioLevel]);
+
+  // Smooth live mic level for cleaner waveform motion while staying real-time.
+  useEffect(() => {
+    let rafId = 0;
+    let lastTime = performance.now();
+    const twoPi = Math.PI * 2;
+
+    const animate = (time: number) => {
+      const deltaSec = Math.min(0.05, (time - lastTime) / 1000);
+      lastTime = time;
+      const isWaveActive =
+        stateRef.current === "listening" || stateRef.current === "handsfree";
+
+      setAudioLevel((previous) => {
+        const target = rawAudioLevelRef.current < 0.01 ? 0 : rawAudioLevelRef.current;
+        const attack = 1 - Math.exp(-deltaSec * 28.0);
+        const release = 1 - Math.exp(-deltaSec * 9.0);
+        const alpha = target > previous ? attack : release;
+        let next = previous + (target - previous) * alpha;
+
+        // Snap near-silence cleanly so bars do not micro-jitter at idle.
+        if (target === 0 && next < 0.01) next = 0;
+        return Math.max(0, Math.min(1, next));
+      });
+
+      if (isWaveActive) {
+        wavePhaseRef.current = (wavePhaseRef.current + deltaSec * 9.5) % twoPi;
+        setWavePhase(wavePhaseRef.current);
+      } else if (wavePhaseRef.current !== 0) {
+        wavePhaseRef.current = 0;
+        setWavePhase(0);
+      }
+
+      rafId = requestAnimationFrame(animate);
+    };
+
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
 
   // Listen for word-learned events from backend
   useEffect(() => {
@@ -123,17 +167,35 @@ export default function AssistantPage() {
   // Poll audio level when listening/handsfree
   useEffect(() => {
     if ((state === "listening" || state === "handsfree") && isTauri()) {
-      audioLevelInterval.current = setInterval(async () => {
+      let isStopped = false;
+
+      const pollAudioLevel = async () => {
+        if (isStopped) return;
         try {
           const level = await getAudioLevel();
-          setAudioLevel(level);
+          if (isStopped) return;
+          const normalized = Math.max(0, Math.min(1, level));
+          // Remove quiet-floor noise so waveform doesn't look "always rising".
+          const denoised = Math.max(0, (normalized - 0.018) / (1 - 0.018));
+          setRawAudioLevel(denoised);
         } catch { /* ignore */ }
-      }, 50);
+
+        if (!isStopped) {
+          audioLevelInterval.current = setTimeout(pollAudioLevel, 24);
+        }
+      };
+
+      void pollAudioLevel();
+
+      return () => {
+        isStopped = true;
+        if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current);
+      };
     } else {
-      if (audioLevelInterval.current) clearInterval(audioLevelInterval.current);
-      setAudioLevel(0);
+      if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current);
+      setRawAudioLevel(0);
     }
-    return () => { if (audioLevelInterval.current) clearInterval(audioLevelInterval.current); };
+    return () => { if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current); };
   }, [state]);
 
   const start = useCallback(async (handsfree = false) => {
@@ -265,6 +327,8 @@ export default function AssistantPage() {
     return () => { unlistenPressed?.(); unlistenReleased?.(); };
   }, [mounted, start, stop]);
 
+  const chipWidth = state === "handsfree" ? 140 : (state === "listening" || state === "processing" ? 100 : 44);
+  const chipHeight = state === "idle" ? 20 : 24;
   const isActive = state !== "idle";
 
   return (
@@ -319,29 +383,48 @@ export default function AssistantPage() {
 
       {/* Main Pill */}
       <motion.div
-        className="relative flex items-center justify-center rounded-full cursor-pointer overflow-hidden keep-bg"
-        style={{
-          background: "rgba(30,30,30,0.95)",
-          border: "1px solid rgba(255,255,255,0.15)",
-        }}
+        className="relative rounded-full cursor-pointer overflow-hidden keep-bg"
+        style={{ willChange: "width,height" }}
         initial={false}
         animate={{
-          width: state === "handsfree" ? 140 : (state === "listening" || state === "processing" ? 100 : 44),
-          height: state === "idle" ? 20 : 24,
+          width: chipWidth,
+          height: chipHeight,
         }}
         transition={{ type: "spring", stiffness: 400, damping: 30 }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onClick={() => { if (state === "idle") start(true); }}
       >
-        <AnimatePresence mode="wait">
-          {state === "idle" && <IdlePill key="idle" />}
-          {state === "listening" && <ListeningWave key="listening" level={audioLevel} />}
-          {state === "handsfree" && <HandsfreePill key="handsfree" level={audioLevel} onCancel={cancel} onStop={stop} />}
-          {state === "processing" && <ProcessingPill key="processing" />}
-          {state === "success" && <SuccessPill key="success" />}
-          {state === "error" && <ErrorPill key="error" />}
-        </AnimatePresence>
+        <motion.div
+          className="absolute inset-0 keep-bg"
+          style={{
+            background:
+              "linear-gradient(120deg, #3559E9, #F6B51E, #7D52F4, #E9358F, #3559E9)",
+            backgroundSize: "320% 320%",
+          }}
+          animate={{
+            backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
+            opacity: isActive ? 1 : 0,
+          }}
+          transition={{ duration: 5, repeat: Infinity, ease: "linear" }}
+        />
+        <div
+          className="absolute inset-[2px] rounded-full keep-bg"
+          style={{
+            background: "rgba(25, 25, 28, 0.92)",
+            border: "1px solid rgba(255,255,255,0.08)",
+          }}
+        />
+        <div className="relative z-10 flex h-full w-full items-center justify-center">
+          <AnimatePresence mode="wait">
+            {state === "idle" && <IdlePill key="idle" />}
+            {state === "listening" && <ListeningWave key="listening" level={audioLevel} phase={wavePhase} />}
+            {state === "handsfree" && <HandsfreePill key="handsfree" level={audioLevel} phase={wavePhase} onCancel={cancel} onStop={stop} />}
+            {state === "processing" && <ProcessingPill key="processing" />}
+            {state === "success" && <SuccessPill key="success" />}
+            {state === "error" && <ErrorPill key="error" />}
+          </AnimatePresence>
+        </div>
       </motion.div>
     </div>
   );
@@ -362,23 +445,32 @@ function IdlePill() {
   );
 }
 
-function ListeningWave({ level }: { level: number }) {
-  const normalizedLevel = Math.max(0.15, level); // Minimum animation even when quiet
+function ListeningWave({ level, phase }: { level: number; phase: number }) {
+  const normalizedLevel = Math.max(0, Math.min(1, level));
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-2">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex h-[18px] items-center justify-center gap-[2px] px-2">
       {[...Array(8)].map((_, i) => {
         const centerDist = Math.abs(i - 3.5) / 3.5;
-        const baseHeight = 3;
-        const maxHeight = 14;
-        const height = baseHeight + (maxHeight - baseHeight) * normalizedLevel * (1 - centerDist * 0.4) * (0.6 + Math.random() * 0.4);
-        return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400 keep-bg" animate={{ height }} transition={{ duration: 0.05 }} />;
+        const weight = 1 - centerDist * 0.45;
+        const flow = 0.82 + 0.18 * Math.sin(phase + i * 0.75);
+        const energy = Math.pow(normalizedLevel, 0.92);
+        const baseHeight = 2.2;
+        const maxHeight = 18;
+        const height = baseHeight + (maxHeight - baseHeight) * energy * weight * flow;
+        return (
+          <div
+            key={i}
+            className="w-[2px] rounded-full bg-blue-400 keep-bg"
+            style={{ height: `${height.toFixed(2)}px` }}
+          />
+        );
       })}
     </motion.div>
   );
 }
 
-function HandsfreePill({ level, onCancel, onStop }: { level: number; onCancel: () => void; onStop: () => void }) {
-  const normalizedLevel = Math.max(0.15, level); // Minimum animation
+function HandsfreePill({ level, phase, onCancel, onStop }: { level: number; phase: number; onCancel: () => void; onStop: () => void }) {
+  const normalizedLevel = Math.max(0, Math.min(1, level));
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-between w-full px-1">
       <button onClick={(e) => { e.stopPropagation(); onCancel(); }} className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors keep-bg">
@@ -386,13 +478,22 @@ function HandsfreePill({ level, onCancel, onStop }: { level: number; onCancel: (
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      <div className="flex items-center justify-center gap-[2px] flex-1 mx-1">
+      <div className="flex h-[16px] items-center justify-center gap-[2px] flex-1 mx-1">
         {[...Array(8)].map((_, i) => {
           const centerDist = Math.abs(i - 3.5) / 3.5;
-          const baseHeight = 3;
-          const maxHeight = 12;
-          const height = baseHeight + (maxHeight - baseHeight) * normalizedLevel * (1 - centerDist * 0.4) * (0.6 + Math.random() * 0.4);
-          return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400 keep-bg" animate={{ height }} transition={{ duration: 0.05 }} />;
+          const weight = 1 - centerDist * 0.45;
+          const flow = 0.82 + 0.18 * Math.sin(phase + i * 0.75);
+          const energy = Math.pow(normalizedLevel, 0.92);
+          const baseHeight = 2;
+          const maxHeight = 16;
+          const height = baseHeight + (maxHeight - baseHeight) * energy * weight * flow;
+          return (
+            <div
+              key={i}
+              className="w-[2px] rounded-full bg-blue-400 keep-bg"
+              style={{ height: `${height.toFixed(2)}px` }}
+            />
+          );
         })}
       </div>
       <button onClick={(e) => { e.stopPropagation(); onStop(); }} className="w-5 h-5 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors keep-bg">
