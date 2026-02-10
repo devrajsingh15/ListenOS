@@ -6,6 +6,8 @@ import {
   isTauri,
   startListening,
   stopListening,
+  playTtsFromBase64,
+  speakWithFallbackTts,
   onShortcutPressed,
   onShortcutReleased,
   type VoiceProcessingResult,
@@ -107,6 +109,20 @@ export function VoiceOverlay({
       
       setLastResult(result);
       setActionType(result.action.action_type);
+
+      const ttsBase64 = typeof result.action?.payload?.tts_base64 === "string"
+        ? result.action.payload.tts_base64
+        : null;
+      if (ttsBase64) {
+        void playTtsFromBase64(ttsBase64).catch((err) => {
+          console.warn("[VoiceOverlay] Failed to play TTS audio:", err);
+        });
+      } else {
+        const fallbackSpeech = result.response_text || result.action?.response_text;
+        if (typeof fallbackSpeech === "string" && fallbackSpeech.trim().length > 0) {
+          speakWithFallbackTts(fallbackSpeech);
+        }
+      }
       
       // Check if this is a conversational response
       const isConversational = result.action.action_type === "Respond" || 
@@ -126,8 +142,12 @@ export function VoiceOverlay({
           setState("success");
           scheduleHide(2500);
         } else {
+          const executionError = typeof result.action?.payload?.execution_error === "string"
+            ? result.action.payload.execution_error
+            : null;
+          setStatusText(executionError || result.response_text || "Action failed");
           setState("error");
-          scheduleHide(2500);
+          scheduleHide(3200);
         }
       } else if (result.action.action_type === "NoAction") {
         // Silent dismissal for filtered hallucinations
@@ -191,7 +211,7 @@ export function VoiceOverlay({
             {[...Array(12)].map((_, i) => (
               <motion.div
                 key={i}
-                className="w-1 rounded-full bg-primary"
+                className="w-1 rounded-full bg-primary keep-bg"
                 animate={{ height: [8, 28, 8] }}
                 transition={{
                   duration: 0.6,
@@ -214,7 +234,7 @@ export function VoiceOverlay({
           <motion.div 
             initial={{ scale: 0 }}
             animate={{ scale: 1 }}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/20"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/20 keep-bg"
           >
             <svg className="h-6 w-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -226,7 +246,7 @@ export function VoiceOverlay({
           <motion.div 
             initial={{ scale: 0 }}
             animate={{ scale: 1 }}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/20"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/20 keep-bg"
           >
             <svg className="h-6 w-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -238,7 +258,7 @@ export function VoiceOverlay({
           <motion.div 
             initial={{ scale: 0 }}
             animate={{ scale: 1 }}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20 keep-bg"
           >
             <svg className="h-6 w-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -281,36 +301,16 @@ export function VoiceOverlay({
           transition={{ duration: 0.15, ease: "easeOut" }}
           className="fixed left-1/2 top-1/2 z-[100] -translate-x-1/2 -translate-y-1/2"
         >
-          <div className="flex flex-col items-center gap-4 rounded-2xl bg-card/95 px-8 py-6 shadow-2xl backdrop-blur-md min-w-[280px] max-w-[400px] border border-border/50">
+          <div className="flex flex-col items-center gap-4 rounded-2xl bg-card/95 px-8 py-6 backdrop-blur-md min-w-[280px] max-w-[400px] border border-border/50 keep-bg">
             {/* Icon */}
             {renderIcon()}
-            
-            {/* Status text */}
-            <div className="text-center">
-              {state === "response" ? (
-                <>
-                  <p className="text-xs text-muted mb-2">{statusText}</p>
-                  <motion.p 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-sm font-medium text-foreground leading-relaxed"
-                  >
-                    {responseText}
-                  </motion.p>
-                </>
-              ) : (
-                <p className="text-sm font-medium text-foreground">
-                  {statusText}
-                </p>
-              )}
-            </div>
             
             {/* Action badge */}
             {(state === "success" || state === "response") && actionType && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex items-center gap-2 rounded-full bg-sidebar-bg px-3 py-1"
+                className="flex items-center gap-2 rounded-full bg-sidebar-bg px-3 py-1 keep-bg"
               >
                 <span>{getActionDisplay(actionType).icon}</span>
                 <span className="text-xs text-muted">
@@ -344,7 +344,7 @@ export function VoiceOverlay({
                     clearHideTimeout();
                     handleStartListening();
                   }}
-                  className="flex items-center gap-1 rounded-lg bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20 transition-colors"
+                  className="flex items-center gap-1 rounded-lg bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20 transition-colors keep-bg"
                 >
                   <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
@@ -357,7 +357,7 @@ export function VoiceOverlay({
             {/* Keyboard hint when listening */}
             {state === "listening" && (
               <p className="text-xs text-muted">
-                Release <kbd className="rounded bg-sidebar-bg px-1.5 py-0.5 font-mono text-[10px]">Ctrl+Space</kbd> when done
+                Release <kbd className="rounded bg-sidebar-bg px-1.5 py-0.5 font-mono text-[10px] keep-bg">Ctrl+Space</kbd> when done
               </p>
             )}
           </div>

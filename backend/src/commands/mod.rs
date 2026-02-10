@@ -8,6 +8,7 @@ pub mod custom;
 use crate::AppState;
 use crate::audio::AudioDevice;
 use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -205,9 +206,11 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     // 1) Try backend API (recommended for centralized auth/rate policies)
     // 2) Fallback to direct Groq call if server is unavailable/misconfigured
     let transcription = {
-        let server_transcription = {
+        let server_transcription = if use_remote_api() {
             let api_client = state.api_client.lock().await;
             api_client.transcribe(&wav_data, Some(&dictionary_hints)).await
+        } else {
+            Err("remote API disabled".to_string())
         };
 
         match server_transcription {
@@ -221,10 +224,14 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 }
             }
             Err(server_err) => {
-                log::warn!(
-                    "Server transcription failed, attempting direct Groq fallback: {}",
-                    server_err
-                );
+                if server_err == "remote API disabled" {
+                    log::info!("Remote API disabled, using direct Groq transcription");
+                } else {
+                    log::warn!(
+                        "Server transcription failed, attempting direct Groq fallback: {}",
+                        server_err
+                    );
+                }
 
                 let groq_client = GroqClient::new();
                 match groq_client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
@@ -384,8 +391,37 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         (ctx, conversation.session_id.clone())
     };
 
-    // Use server API for intent processing
-    let mut action = {
+    let local_router_action = cloud::detect_local_command(&transcription.text);
+
+    let question_action = if local_router_action.is_none() && should_handle_as_question(&transcription.text, &context) {
+        match build_question_response_action(&transcription.text, &conv_context).await {
+            Ok(action) => {
+                log::info!("Question router selected local Q&A response");
+                Some(action)
+            }
+            Err(e) => {
+                log::warn!("Question router failed, falling back to normal intent routing: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Intent routing:
+    // 1) Deterministic local router first for explicit command phrases
+    // 2) Server intent processing for ambiguous/longer requests
+    let resolve_server_action = || async {
+        if !use_remote_api() {
+            return ActionResult {
+                action_type: ActionType::TypeText,
+                payload: serde_json::json!({}),
+                refined_text: Some(transcription.text.clone()),
+                response_text: None,
+                requires_confirmation: false,
+            };
+        }
+
         let api_client = state.api_client.lock().await;
         
         // Build request for server API
@@ -463,6 +499,30 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     };
 
+    let mut action = if let Some(local_action) = local_router_action {
+        log::info!(
+            "Local router selected action {:?} for transcript '{}'",
+            local_action.action_type,
+            transcription.text
+        );
+        local_action
+    } else if let Some(question_action) = question_action {
+        question_action
+    } else if should_route_locally_first(&transcription.text, &context) {
+        if let Some(local_action) = cloud::detect_local_command(&transcription.text) {
+            log::info!(
+                "Local router first selected action {:?} for transcript '{}'",
+                local_action.action_type,
+                transcription.text
+            );
+            local_action
+        } else {
+            resolve_server_action().await
+        }
+    } else {
+        resolve_server_action().await
+    };
+
     // Deterministic local router fallback.
     // If server returns dictation for an obvious command phrase, prefer local action routing.
     if should_use_local_command_fallback(&transcription.text, &context, &action) {
@@ -476,8 +536,15 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     }
 
-    let requires_confirmation = action.requires_confirmation || action_requires_confirmation(&action);
+    let confirms_enabled = confirmations_enabled();
+    let requires_confirmation = confirms_enabled
+        && (action.requires_confirmation || action_requires_confirmation(&action));
     let mut pending_action_id: Option<String> = None;
+
+    if !confirms_enabled {
+        let mut pending = state.pending_action.lock().await;
+        *pending = None;
+    }
 
     if requires_confirmation {
         let id = uuid::Uuid::new_v4().to_string();
@@ -511,7 +578,79 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         execute_action_internal(&action, &state).await
     };
 
-    let executed = !requires_confirmation && execute_result.is_ok();
+    if !requires_confirmation {
+        match &execute_result {
+            Ok(result) => {
+                if result.success {
+                    upsert_action_payload_field(
+                        &mut action,
+                        "execution_message",
+                        serde_json::Value::String(result.message.clone()),
+                    );
+                    upsert_action_payload_field(&mut action, "executed", serde_json::Value::Bool(true));
+
+                    if action.response_text.is_none()
+                        && !matches!(action.action_type, ActionType::TypeText | ActionType::NoAction)
+                    {
+                        action.response_text = Some(result.message.clone());
+                    }
+                } else {
+                    upsert_action_payload_field(
+                        &mut action,
+                        "execution_error",
+                        serde_json::Value::String(result.message.clone()),
+                    );
+                    upsert_action_payload_field(&mut action, "executed", serde_json::Value::Bool(false));
+
+                    if action.response_text.is_none() {
+                        action.response_text = Some(format!("I couldn't complete that: {}", result.message));
+                    }
+                }
+            }
+            Err(err) => {
+                upsert_action_payload_field(
+                    &mut action,
+                    "execution_error",
+                    serde_json::Value::String(err.clone()),
+                );
+                upsert_action_payload_field(&mut action, "executed", serde_json::Value::Bool(false));
+
+                if action.response_text.is_none() {
+                    action.response_text = Some(format!("I couldn't complete that: {}", err));
+                }
+            }
+        }
+    }
+
+    if !requires_confirmation && should_voice_confirm(&action) {
+        let has_tts_payload = action.payload.get("tts_base64").is_some()
+            || action.payload.get("tts_error").is_some();
+        if !has_tts_payload {
+            let confirmation_text = action
+                .response_text
+                .clone()
+                .or_else(|| execute_result.as_ref().ok().map(|r| r.message.clone()))
+                .unwrap_or_else(|| summarize_action(&action));
+
+            if action.response_text.is_none() {
+                action.response_text = Some(confirmation_text.clone());
+            }
+
+            match synthesize_elevenlabs_tts_base64(&confirmation_text).await {
+                Ok(audio) => attach_tts_payload(&mut action, Some(audio), None),
+                Err(err) => {
+                    log::warn!("ElevenLabs TTS unavailable for action {:?}: {}", action.action_type, err);
+                    attach_tts_payload(&mut action, None, Some(err));
+                }
+            }
+        }
+    }
+
+    let executed = !requires_confirmation
+        && execute_result
+            .as_ref()
+            .map(|result| result.success)
+            .unwrap_or(false);
     
     // Log execution errors
     if let Err(ref e) = execute_result {
@@ -713,6 +852,443 @@ pub async fn set_audio_device(
     Ok(true)
 }
 
+fn trim_spoken_punctuation(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_end_matches('.')
+        .trim_end_matches(',')
+        .trim_end_matches('!')
+        .trim_end_matches('?')
+        .trim()
+        .to_string()
+}
+
+fn normalize_web_target(target: &str) -> Option<String> {
+    let mut normalized = trim_spoken_punctuation(target)
+        .replace(" dot ", ".")
+        .replace(" slash ", "/")
+        .replace(" colon ", ":")
+        .replace("  ", " ");
+    normalized = normalized.trim().to_string();
+
+    if normalized.is_empty() || normalized.contains(' ') {
+        return None;
+    }
+
+    let lower = normalized.to_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(normalized);
+    }
+    if lower.starts_with("www.") {
+        return Some(format!("https://{}", normalized));
+    }
+
+    let host = lower.split('/').next().unwrap_or("");
+    let host_without_port = host.split(':').next().unwrap_or(host);
+    if host_without_port.contains('.') {
+        let parts: Vec<&str> = host_without_port.split('.').collect();
+        if parts.len() >= 2 {
+            let tld = parts.last().copied().unwrap_or("");
+            if tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()) {
+                return Some(format!("https://{}", normalized));
+            }
+        }
+    }
+
+    None
+}
+
+fn is_known_tld(token: &str) -> bool {
+    matches!(
+        token,
+        "com"
+            | "org"
+            | "net"
+            | "io"
+            | "ai"
+            | "dev"
+            | "app"
+            | "co"
+            | "us"
+            | "in"
+            | "edu"
+            | "gov"
+    )
+}
+
+fn infer_web_target_from_phrase(target: &str, allow_single_word: bool) -> Option<String> {
+    let cleaned = trim_spoken_punctuation(target)
+        .replace(",", " ")
+        .replace("  ", " ");
+    let lower = cleaned.to_lowercase();
+
+    if let Some(url) = normalize_web_target(&lower) {
+        return Some(url);
+    }
+
+    let words: Vec<&str> = lower.split_whitespace().filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+
+    if words.len() >= 2 {
+        let tld = words[words.len() - 1];
+        if is_known_tld(tld) {
+            let host = words[..words.len() - 1].join("");
+            if !host.is_empty()
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                return Some(format!("https://{}.{}", host, tld));
+            }
+        }
+    }
+
+    if allow_single_word && words.len() == 1 {
+        let token = words[0];
+        if token.len() >= 2
+            && token.len() <= 48
+            && token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Some(format!("https://{}.com", token));
+        }
+    }
+
+    None
+}
+
+fn use_remote_api() -> bool {
+    std::env::var("LISTENOS_USE_REMOTE_API")
+        .map(|v| {
+            let value = v.trim().to_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+fn confirmations_enabled() -> bool {
+    std::env::var("LISTENOS_REQUIRE_CONFIRMATION")
+        .map(|v| {
+            let value = v.trim().to_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+fn normalize_spoken_command_text(text: &str) -> String {
+    let mut t = text.trim().to_lowercase();
+
+    loop {
+        let mut changed = false;
+        for prefix in [
+            "please ",
+            "can you please ",
+            "could you please ",
+            "would you please ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "hey listenos ",
+            "listenos ",
+            "assistant ",
+            "hey assistant ",
+        ] {
+            if let Some(rest) = t.strip_prefix(prefix) {
+                t = rest.trim().to_string();
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    t
+}
+
+fn should_handle_as_question(text: &str, context: &VoiceContext) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+
+    // Commands always win over Q&A.
+    if looks_like_command_phrase(text) {
+        return false;
+    }
+
+    let mut t = normalize_spoken_command_text(text);
+    t = t.replace("  ", " ");
+    let words = t.split_whitespace().count();
+
+    let explicit_question_prefix = t.starts_with("ask ")
+        || t.starts_with("question ")
+        || t.starts_with("answer this ")
+        || t.starts_with("tell me ")
+        || t.starts_with("explain ");
+
+    // Explicit prefixes always opt into Q&A mode, even in dictation mode.
+    if explicit_question_prefix {
+        return true;
+    }
+
+    let question_starters = [
+        "what",
+        "what's",
+        "who",
+        "when",
+        "where",
+        "why",
+        "how",
+        "is ",
+        "are ",
+        "do ",
+        "does ",
+        "did ",
+    ];
+
+    let looks_like_question = t.ends_with('?')
+        || question_starters.iter().any(|prefix| t.starts_with(prefix));
+
+    if !looks_like_question {
+        return false;
+    }
+
+    // In dictation mode, only explicit prefixes enter Q&A.
+    // This keeps normal dictation questions from being hijacked by the assistant.
+    match context.mode {
+        VoiceMode::Command => words <= 40,
+        VoiceMode::Dictation => false,
+    }
+}
+
+fn clean_question_text(text: &str) -> String {
+    let mut t = text.trim().to_string();
+    let lower = t.to_lowercase();
+    for prefix in ["ask ", "question ", "answer this "] {
+        if lower.starts_with(prefix) {
+            t = t[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+    trim_spoken_punctuation(&t)
+}
+
+async fn generate_groq_answer(question: &str, conv_context: &ConversationContext) -> Result<String, String> {
+    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| cloud::get_groq_key());
+    if api_key.trim().is_empty() {
+        return Err("Missing GROQ_API_KEY".to_string());
+    }
+
+    let mut messages = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": "You are ListenOS voice assistant. Reply naturally in 1-3 concise sentences unless the user asks for more detail."
+        })
+    ];
+
+    if !conv_context.history.trim().is_empty() {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": format!("Conversation context:\n{}", conv_context.history)
+        }));
+    }
+
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": question
+    }));
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": "llama-3.3-70b-versatile",
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 280
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Groq request failed: {}", e))?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Groq error [{}]: {}", status, body));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
+
+    let answer = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if answer.is_empty() {
+        return Err("Groq returned empty answer".to_string());
+    }
+
+    Ok(answer)
+}
+
+async fn synthesize_elevenlabs_tts_base64(text: &str) -> Result<String, String> {
+    let api_key = std::env::var("ELEVENLABS_API_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if api_key.is_empty() {
+        return Err("Missing ELEVENLABS_API_KEY".to_string());
+    }
+    if api_key.eq_ignore_ascii_case("replace_with_elevenlabs_api_key") {
+        return Err("ELEVENLABS_API_KEY is still a placeholder value".to_string());
+    }
+
+    let voice_id = std::env::var("ELEVENLABS_VOICE_ID")
+        .unwrap_or_else(|_| "EXAVITQu4vr4xnSDxMaL".to_string());
+    let model_id = std::env::var("ELEVENLABS_MODEL_ID")
+        .unwrap_or_else(|_| "eleven_flash_v2_5".to_string());
+
+    let url = format!(
+        "https://api.elevenlabs.io/v1/text-to-speech/{}/stream?output_format=mp3_44100_128",
+        voice_id
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("xi-api-key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "text": text,
+            "model_id": model_id
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("ElevenLabs request failed: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err_text = response.text().await.unwrap_or_default();
+        return Err(format!("ElevenLabs error [{}]: {}", status, err_text));
+    }
+
+    let bytes = response.bytes().await
+        .map_err(|e| format!("Failed to read ElevenLabs audio stream: {}", e))?;
+
+    if bytes.is_empty() {
+        return Err("ElevenLabs returned empty audio".to_string());
+    }
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+fn attach_tts_payload(action: &mut ActionResult, tts_base64: Option<String>, tts_error: Option<String>) {
+    let mut payload = match action.payload.as_object() {
+        Some(obj) => obj.clone(),
+        None => serde_json::Map::new(),
+    };
+
+    if let Some(audio) = tts_base64 {
+        payload.insert("tts_base64".to_string(), serde_json::Value::String(audio));
+        payload.insert(
+            "audio_mime".to_string(),
+            serde_json::Value::String("audio/mpeg".to_string()),
+        );
+        payload.insert(
+            "tts_provider".to_string(),
+            serde_json::Value::String("elevenlabs".to_string()),
+        );
+        payload.remove("tts_error");
+    } else if let Some(err) = tts_error {
+        payload.insert("tts_error".to_string(), serde_json::Value::String(err));
+    }
+
+    action.payload = serde_json::Value::Object(payload);
+}
+
+fn upsert_action_payload_field(action: &mut ActionResult, key: &str, value: serde_json::Value) {
+    if let Some(obj) = action.payload.as_object_mut() {
+        obj.insert(key.to_string(), value);
+    } else {
+        let mut payload = serde_json::Map::new();
+        payload.insert(key.to_string(), value);
+        action.payload = serde_json::Value::Object(payload);
+    }
+}
+
+fn should_voice_confirm(action: &ActionResult) -> bool {
+    matches!(
+        action.action_type,
+        ActionType::Respond
+            | ActionType::Clarify
+            | ActionType::OpenApp
+            | ActionType::OpenUrl
+            | ActionType::WebSearch
+            | ActionType::RunCommand
+            | ActionType::VolumeControl
+            | ActionType::SystemControl
+            | ActionType::SpotifyControl
+            | ActionType::DiscordControl
+            | ActionType::KeyboardShortcut
+            | ActionType::WindowControl
+            | ActionType::CustomCommand
+            | ActionType::MultiStep
+    )
+}
+
+async fn build_question_response_action(
+    transcription: &str,
+    conv_context: &ConversationContext,
+) -> Result<ActionResult, String> {
+    let question = clean_question_text(transcription);
+    if question.is_empty() {
+        return Err("Question text is empty".to_string());
+    }
+
+    let answer = generate_groq_answer(&question, conv_context).await?;
+    let mut action = ActionResult {
+        action_type: ActionType::Respond,
+        payload: serde_json::json!({
+            "source": "ask_mode"
+        }),
+        refined_text: None,
+        response_text: Some(answer),
+        requires_confirmation: false,
+    };
+
+    match synthesize_elevenlabs_tts_base64(
+        action.response_text.as_deref().unwrap_or_default(),
+    )
+    .await
+    {
+        Ok(audio) => attach_tts_payload(&mut action, Some(audio), None),
+        Err(err) => {
+            log::warn!("ElevenLabs TTS unavailable for ask-mode response: {}", err);
+            attach_tts_payload(&mut action, None, Some(err));
+        }
+    }
+
+    Ok(action)
+}
+
+fn should_route_locally_first(text: &str, context: &VoiceContext) -> bool {
+    if context.mode == VoiceMode::Command {
+        return true;
+    }
+
+    looks_like_command_phrase(text)
+}
+
 fn should_use_local_command_fallback(
     text: &str,
     context: &VoiceContext,
@@ -730,13 +1306,9 @@ fn should_use_local_command_fallback(
 }
 
 fn looks_like_command_phrase(text: &str) -> bool {
-    let mut t = text.trim().to_lowercase();
+    let t = normalize_spoken_command_text(text);
     if t.is_empty() {
         return false;
-    }
-
-    if let Some(rest) = t.strip_prefix("please ") {
-        t = rest.trim().to_string();
     }
 
     let exact_commands = [
@@ -756,24 +1328,66 @@ fn looks_like_command_phrase(text: &str) -> bool {
         "maximize",
         "minimize",
         "show desktop",
+        "task view",
+        "desktop view",
+        "next desktop",
+        "previous desktop",
     ];
     if exact_commands.contains(&t.as_str()) {
         return true;
     }
 
+    if (t.contains("organize") || t.contains("sort") || t.contains("clean up"))
+        && t.contains("download")
+    {
+        return true;
+    }
+
+    if t.contains("download")
+        && (
+            t.contains("how many")
+                || t.contains("how much")
+                || t.contains("count")
+                || t.contains("number of")
+        )
+    {
+        return true;
+    }
+
+    if t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen") {
+        return true;
+    }
+
+    for prefix in ["open ", "launch ", "start ", "visit ", "go to "] {
+        if let Some(target) = t.strip_prefix(prefix) {
+            if normalize_web_target(target).is_some() {
+                return true;
+            }
+            let target_words = target.split_whitespace().count();
+            if (1..=4).contains(&target_words) {
+                return true;
+            }
+            // Long "open ..." phrases are usually dictation, not commands.
+            return false;
+        }
+    }
+
     let command_prefixes = [
-        "open ",
-        "launch ",
-        "start ",
         "search ",
         "search for ",
         "google ",
         "look up ",
+        "organize ",
+        "sort ",
         "volume ",
         "lock ",
         "take a screenshot",
+        "capture screen",
         "screenshot",
         "switch ",
+        "desktop view",
+        "switch to next desktop",
+        "switch to previous desktop",
         "close window",
         "close tab",
         "new tab",
@@ -794,7 +1408,13 @@ fn action_requires_confirmation(action: &ActionResult) -> bool {
                 .to_lowercase();
             matches!(
                 system_action.as_str(),
-                "shutdown" | "restart" | "sleep" | "recycle_bin" | "factory_reset" | "sign_out"
+                "shutdown"
+                    | "restart"
+                    | "sleep"
+                    | "recycle_bin"
+                    | "factory_reset"
+                    | "sign_out"
+                    | "organize_downloads"
             )
         }
         _ => false,
@@ -817,7 +1437,13 @@ fn summarize_action(action: &ActionResult) -> String {
         }
         ActionType::SystemControl => {
             let system_action = action.payload.get("action").and_then(|v| v.as_str()).unwrap_or("system action");
-            format!("System action: {}", system_action)
+            match system_action {
+                "organize_downloads" => "Organize Downloads folder".to_string(),
+                "downloads_count" => "Count items in Downloads folder".to_string(),
+                "screenshot" => "Take a screenshot".to_string(),
+                "open_screenshots_folder" => "Open screenshots folder".to_string(),
+                _ => format!("System action: {}", system_action),
+            }
         }
         ActionType::RunCommand => {
             let cmd = action.payload.get("command").and_then(|v| v.as_str()).unwrap_or("command");
@@ -850,6 +1476,60 @@ fn summarize_action(action: &ActionResult) -> String {
 }
 
 // ============ Action Execution ============
+
+async fn open_url_internal(url: &str) -> Result<CommandResult, String> {
+    let normalized_url = normalize_web_target(url)
+        .or_else(|| infer_web_target_from_phrase(url, false))
+        .unwrap_or_else(|| trim_spoken_punctuation(url));
+
+    if normalized_url.is_empty() {
+        return Ok(CommandResult {
+            success: false,
+            message: "No URL specified".to_string(),
+            output: None,
+        });
+    }
+
+    log::info!("Opening URL: {}", normalized_url);
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let result = Command::new("cmd")
+            .args(["/C", "start", "", &normalized_url])
+            .spawn();
+
+        match result {
+            Ok(_) => Ok(CommandResult {
+                success: true,
+                message: format!("Opened: {}", normalized_url),
+                output: None,
+            }),
+            Err(e) => Err(format!("Failed to open URL: {}", e)),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let result = Command::new("open").arg(&normalized_url).spawn();
+
+        match result {
+            Ok(_) => Ok(CommandResult {
+                success: true,
+                message: format!("Opened: {}", normalized_url),
+                output: None,
+            }),
+            Err(e) => Err(format!("Failed to open URL: {}", e)),
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let cmd = format!("xdg-open \"{}\" 2>/dev/null || open \"{}\"", normalized_url, normalized_url);
+        run_system_command(cmd).await
+    }
+}
 
 async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
     match action.action_type {
@@ -927,6 +1607,12 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     message: "No app specified".to_string(),
                     output: None,
                 });
+            }
+
+            // If the "app" looks like a URL/domain, open it in browser directly.
+            if let Some(url) = normalize_web_target(&app) {
+                log::info!("OpenApp target looked like URL, redirecting to browser: {}", url);
+                return open_url_internal(&url).await;
             }
             
             log::info!("Opening app: {}", app);
@@ -1052,19 +1738,44 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     }
                 }
                 
-                // Fallback: try to start by name directly
-                let result = Command::new("cmd")
-                    .args(["/C", "start", &app])
-                    .spawn();
-                
-                match result {
-                    Ok(_) => Ok(CommandResult {
-                        success: true,
-                        message: format!("Opened: {}", app),
-                        output: None,
-                    }),
-                    Err(e) => Err(format!("Failed to open {}: {}", app, e)),
+                // Fallback:
+                // 1) If executable is available in PATH, start it.
+                // 2) Otherwise treat as a likely website (e.g., "notion" -> notion.com).
+                let executable_exists = Command::new("cmd")
+                    .args(["/C", "where", &app])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                if executable_exists {
+                    let result = Command::new("cmd")
+                        .args(["/C", "start", "", &app])
+                        .spawn();
+
+                    return match result {
+                        Ok(_) => Ok(CommandResult {
+                            success: true,
+                            message: format!("Opened: {}", app),
+                            output: None,
+                        }),
+                        Err(e) => Err(format!("Failed to open {}: {}", app, e)),
+                    };
                 }
+
+                if let Some(url) = infer_web_target_from_phrase(&app, true) {
+                    log::info!(
+                        "App '{}' not found in PATH. Falling back to website open: {}",
+                        app,
+                        url
+                    );
+                    return open_url_internal(&url).await;
+                }
+
+                Ok(CommandResult {
+                    success: false,
+                    message: format!("Could not find installed app '{}'", app),
+                    output: None,
+                })
             }
             
             #[cfg(target_os = "macos")]
@@ -1104,8 +1815,16 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                         output: None,
                     });
                 }
-                
-                Err(format!("Could not find app: {}", app))
+
+                if let Some(url) = infer_web_target_from_phrase(&app, true) {
+                    return open_url_internal(&url).await;
+                }
+
+                Ok(CommandResult {
+                    success: false,
+                    message: format!("Could not find installed app '{}'", app),
+                    output: None,
+                })
             }
             
             #[cfg(not(any(windows, target_os = "macos")))]
@@ -1228,39 +1947,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
-            
-            if url.is_empty() {
-                return Ok(CommandResult {
-                    success: false,
-                    message: "No URL specified".to_string(),
-                    output: None,
-                });
-            }
-            
-            log::info!("Opening URL: {}", url);
-            
-            #[cfg(windows)]
-            {
-                use std::process::Command;
-                let result = Command::new("cmd")
-                    .args(["/C", "start", "", url])
-                    .spawn();
-                
-                match result {
-                    Ok(_) => Ok(CommandResult {
-                        success: true,
-                        message: format!("Opened: {}", url),
-                        output: None,
-                    }),
-                    Err(e) => Err(format!("Failed to open URL: {}", e)),
-                }
-            }
-            
-            #[cfg(not(windows))]
-            {
-                let cmd = format!("open \"{}\"", url);
-                run_system_command(cmd).await
-            }
+            open_url_internal(url).await
         }
         
         ActionType::SendEmail => {
@@ -1318,6 +2005,8 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
             
             if let Some(steps) = steps {
                 log::info!("Executing {} steps", steps.len());
+                let mut success_count = 0usize;
+                let mut errors: Vec<String> = Vec::new();
                 
                 for (i, step) in steps.iter().enumerate() {
                     let step_action_type = match step["action"].as_str().unwrap_or("") {
@@ -1327,7 +2016,13 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                         "run_command" => ActionType::RunCommand,
                         "type_text" => ActionType::TypeText,
                         "volume_control" => ActionType::VolumeControl,
-                        _ => continue,
+                        "system_control" => ActionType::SystemControl,
+                        "keyboard_shortcut" => ActionType::KeyboardShortcut,
+                        "window_control" => ActionType::WindowControl,
+                        other => {
+                            errors.push(format!("Unknown step action '{}'", other));
+                            continue;
+                        }
                     };
                     
                     let step_result = ActionResult {
@@ -1341,17 +2036,38 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     log::info!("Step {}: {:?}", i + 1, step_action_type);
                     
                     // Execute and continue regardless of result
-                    if let Err(e) = Box::pin(execute_action_internal(&step_result, state)).await {
-                        log::warn!("Step {} failed: {}", i + 1, e);
+                    match Box::pin(execute_action_internal(&step_result, state)).await {
+                        Ok(_) => {
+                            success_count += 1;
+                        }
+                        Err(e) => {
+                            log::warn!("Step {} failed: {}", i + 1, e);
+                            errors.push(format!("Step {} failed: {}", i + 1, e));
+                        }
                     }
                     
                     // Small delay between steps
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
-                
+
+                if success_count == 0 && !errors.is_empty() {
+                    return Err(errors.join("; "));
+                }
+
+                let message = if errors.is_empty() {
+                    format!("Executed {} steps", steps.len())
+                } else {
+                    format!(
+                        "Executed {}/{} steps. {}",
+                        success_count,
+                        steps.len(),
+                        errors.join("; ")
+                    )
+                };
+
                 Ok(CommandResult {
-                    success: true,
-                    message: format!("Executed {} steps", steps.len()),
+                    success: errors.is_empty(),
+                    message,
                     output: None,
                 })
             } else {
@@ -1830,6 +2546,73 @@ async fn execute_window_control(action: &ActionResult) -> Result<CommandResult, 
             enigo.key(Key::Unicode('d'), Direction::Click).ok();
             std::thread::sleep(std::time::Duration::from_millis(20));
             enigo.key(Key::Meta, Direction::Release).ok();
+            Ok(())
+        }
+        "next_desktop" => {
+            #[cfg(windows)]
+            {
+                // Win+Ctrl+Right
+                enigo.key(Key::Meta, Direction::Press).ok();
+                enigo.key(Key::Control, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::RightArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Control, Direction::Release).ok();
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                // Ctrl+Right (switch space)
+                enigo.key(Key::Control, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::RightArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Control, Direction::Release).ok();
+            }
+            Ok(())
+        }
+        "previous_desktop" => {
+            #[cfg(windows)]
+            {
+                // Win+Ctrl+Left
+                enigo.key(Key::Meta, Direction::Press).ok();
+                enigo.key(Key::Control, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::LeftArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Control, Direction::Release).ok();
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                // Ctrl+Left (switch space)
+                enigo.key(Key::Control, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::LeftArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Control, Direction::Release).ok();
+            }
+            Ok(())
+        }
+        "task_view" => {
+            #[cfg(windows)]
+            {
+                // Win+Tab
+                enigo.key(Key::Meta, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Tab, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Meta, Direction::Release).ok();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                // Ctrl+Up (Mission Control)
+                enigo.key(Key::Control, Direction::Press).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::UpArrow, Direction::Click).ok();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                enigo.key(Key::Control, Direction::Release).ok();
+            }
             Ok(())
         }
         "restore" => {

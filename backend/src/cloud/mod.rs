@@ -44,6 +44,139 @@ fn extract_number(text: &str) -> Option<u32> {
         .find_map(|word| word.parse::<u32>().ok())
 }
 
+fn trim_spoken_punctuation(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_end_matches('.')
+        .trim_end_matches(',')
+        .trim_end_matches('!')
+        .trim_end_matches('?')
+        .trim()
+        .to_string()
+}
+
+fn normalize_web_target(target: &str) -> Option<String> {
+    let mut normalized = trim_spoken_punctuation(target)
+        .replace(" dot ", ".")
+        .replace(" slash ", "/")
+        .replace(" colon ", ":")
+        .replace("  ", " ");
+    normalized = normalized.trim().to_string();
+
+    if normalized.is_empty() || normalized.contains(' ') {
+        return None;
+    }
+
+    let lower = normalized.to_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(normalized);
+    }
+
+    if lower.starts_with("www.") {
+        return Some(format!("https://{}", normalized));
+    }
+
+    // Domain-like: x.com, docs.google.com/path, etc.
+    let host = lower.split('/').next().unwrap_or("");
+    let host_without_port = host.split(':').next().unwrap_or(host);
+    if host_without_port.contains('.') {
+        let parts: Vec<&str> = host_without_port.split('.').collect();
+        if parts.len() >= 2 {
+            let tld = parts.last().copied().unwrap_or("");
+            if tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()) {
+                return Some(format!("https://{}", normalized));
+            }
+        }
+    }
+
+    None
+}
+
+fn is_known_tld(token: &str) -> bool {
+    matches!(
+        token,
+        "com"
+            | "org"
+            | "net"
+            | "io"
+            | "ai"
+            | "dev"
+            | "app"
+            | "co"
+            | "us"
+            | "in"
+            | "edu"
+            | "gov"
+    )
+}
+
+fn infer_web_target_from_phrase(target: &str) -> Option<String> {
+    let cleaned = trim_spoken_punctuation(target)
+        .replace(",", " ")
+        .replace("  ", " ");
+    let lower = cleaned.to_lowercase();
+
+    if let Some(url) = normalize_web_target(&lower) {
+        return Some(url);
+    }
+
+    let words: Vec<&str> = lower.split_whitespace().filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+
+    // Support spoken domains like "x com", "open ai com", "docs example io"
+    if words.len() >= 2 {
+        let tld = words[words.len() - 1];
+        if is_known_tld(tld) {
+            let host = words[..words.len() - 1].join("");
+            if !host.is_empty()
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                return Some(format!("https://{}.{}", host, tld));
+            }
+        }
+    }
+
+    None
+}
+
+fn normalize_spoken_command_text(text: &str) -> String {
+    let mut t = text.trim().to_lowercase();
+
+    loop {
+        let mut changed = false;
+        for prefix in [
+            "please ",
+            "can you please ",
+            "could you please ",
+            "would you please ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "hey listenos ",
+            "listenos ",
+            "assistant ",
+            "hey assistant ",
+        ] {
+            if let Some(rest) = t.strip_prefix(prefix) {
+                t = rest.trim().to_string();
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    t
+}
+
 /// Post-process dictation text to clean up common issues
 fn post_process_dictation(text: &str) -> String {
     let mut result = text.to_string();
@@ -462,7 +595,7 @@ impl GroqClient {
     /// 3. Have no ambiguity with normal dictation
     fn detect_local_command(&self, text: &str) -> Option<ActionResult> {
         // Pre-process: clean up transcription artifacts
-        let t = text.trim().to_lowercase();
+        let t = normalize_spoken_command_text(text);
         // Remove trailing punctuation
         let t = t.trim_end_matches('.').trim_end_matches(',').trim_end_matches('!').trim_end_matches('?');
         // Remove leading punctuation that Whisper sometimes adds
@@ -470,9 +603,9 @@ impl GroqClient {
         // Normalize multiple spaces and remove commas between words (Whisper artifact)
         let t = t.replace(", ", " ").replace("  ", " ");
         
-        // Count words - if too long, probably dictation, let LLM handle it
+        // Count words - if extremely long, likely dictation/paragraph
         let word_count = t.split_whitespace().count();
-        if word_count > 6 {
+        if word_count > 24 {
             return None; // Too long to be a simple command
         }
         
@@ -489,8 +622,105 @@ impl GroqClient {
         if t.contains("sleep") && (t.contains("computer") || t.contains("pc") || t.contains("my") || t == "sleep") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "sleep"})));
         }
-        if t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "screenshot"})));
+        let mentions_downloads = t.contains("download") || t.contains("downloads folder");
+        let wants_download_count = mentions_downloads
+            && (
+                t.contains("how many")
+                    || t.contains("how much")
+                    || t.contains("count")
+                    || t.contains("number of")
+                    || t.contains("how many files")
+            );
+        let wants_organize_downloads = mentions_downloads
+            && (t.contains("organize") || t.contains("sort") || t.contains("clean up"));
+        let wants_screenshot = t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen");
+        let wants_open = t.contains("open") || t.contains("show");
+        let wants_screenshot_folder = t.contains("screenshot folder")
+            || t.contains("screenshots folder")
+            || (t.contains("screenshot") && t.contains("folder"))
+            || (t.contains("screen shot") && t.contains("folder"));
+
+        if wants_screenshot && wants_open && t.contains("folder") {
+            return Some(ActionResult::action(
+                ActionType::MultiStep,
+                serde_json::json!({
+                    "steps": [
+                        { "action": "system_control", "payload": { "action": "screenshot" } },
+                        { "action": "system_control", "payload": { "action": "open_screenshots_folder" } }
+                    ]
+                }),
+            ));
+        }
+
+        if wants_open && wants_screenshot_folder {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "open_screenshots_folder"}),
+            ));
+        }
+
+        if wants_download_count && wants_organize_downloads && wants_screenshot {
+            return Some(ActionResult::action(
+                ActionType::MultiStep,
+                serde_json::json!({
+                    "steps": [
+                        { "action": "system_control", "payload": { "action": "downloads_count" } },
+                        { "action": "system_control", "payload": { "action": "organize_downloads" } },
+                        { "action": "system_control", "payload": { "action": "screenshot" } }
+                    ]
+                }),
+            ));
+        }
+        if wants_download_count && wants_organize_downloads {
+            return Some(ActionResult::action(
+                ActionType::MultiStep,
+                serde_json::json!({
+                    "steps": [
+                        { "action": "system_control", "payload": { "action": "downloads_count" } },
+                        { "action": "system_control", "payload": { "action": "organize_downloads" } }
+                    ]
+                }),
+            ));
+        }
+        if wants_organize_downloads && wants_screenshot {
+            return Some(ActionResult::action(
+                ActionType::MultiStep,
+                serde_json::json!({
+                    "steps": [
+                        { "action": "system_control", "payload": { "action": "organize_downloads" } },
+                        { "action": "system_control", "payload": { "action": "screenshot" } }
+                    ]
+                }),
+            ));
+        }
+        if wants_download_count && wants_screenshot {
+            return Some(ActionResult::action(
+                ActionType::MultiStep,
+                serde_json::json!({
+                    "steps": [
+                        { "action": "system_control", "payload": { "action": "downloads_count" } },
+                        { "action": "system_control", "payload": { "action": "screenshot" } }
+                    ]
+                }),
+            ));
+        }
+        if wants_download_count {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "downloads_count"}),
+            ));
+        }
+        if wants_organize_downloads {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "organize_downloads"}),
+            ));
+        }
+        if wants_screenshot {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "screenshot"}),
+            ));
         }
         // Bluetooth control - distinguish between toggle and settings
         if t.contains("bluetooth") {
@@ -555,42 +785,65 @@ impl GroqClient {
             return Some(ActionResult::action(ActionType::VolumeControl, serde_json::json!({"direction": "mute"})));
         }
         
-        // App launching - check for websites first, then apps
-        // Match various patterns: "open chrome", "open, chrome", "open. chrome", etc.
-        let open_patterns = ["open ", "open, ", "open. ", "launch ", "start "];
+        // App/URL opening - check websites first, then apps
+        // Match patterns: "open chrome", "open x.com", "go to x.com", "visit github.com"
+        let open_patterns = ["open ", "open, ", "open. ", "launch ", "start ", "go to ", "visit "];
         let has_open_prefix = open_patterns.iter().any(|p| t.starts_with(p));
         
         // Also match if it's just "open X" without space issues
         let words: Vec<&str> = t.split_whitespace().collect();
         let is_open_command = words.len() >= 2 && 
-            (words[0] == "open" || words[0] == "launch" || words[0] == "start" ||
+            (words[0] == "open" || words[0] == "launch" || words[0] == "start" || words[0] == "visit" ||
+             (words[0] == "go" && words.get(1) == Some(&"to")) ||
              words[0] == "open," || words[0] == "open.");
         
         if has_open_prefix || is_open_command {
-            // Clean up the app name - remove command word and punctuation
-            let app_name = if is_open_command {
-                // Join all words after the first command word
-                words[1..].join(" ")
-                    .trim_end_matches('.')
-                    .trim_end_matches(',')
-                    .trim_end_matches('!')
-                    .trim_end_matches('?')
-                    .to_string()
+            // Clean up target - remove command words and punctuation
+            let raw_target = if is_open_command {
+                if words[0] == "go" && words.get(1) == Some(&"to") {
+                    words[2..].join(" ")
+                } else {
+                    words[1..].join(" ")
+                }
             } else {
                 t.replace("open, ", "")
                     .replace("open. ", "")
                     .replace("open ", "")
                     .replace("launch ", "")
                     .replace("start ", "")
-                    .trim()
-                    .trim_end_matches('.')
-                    .trim_end_matches(',')
-                    .trim_end_matches('!')
-                    .trim_end_matches('?')
-                    .to_string()
+                    .replace("go to ", "")
+                    .replace("visit ", "")
             };
+
+            let app_name = trim_spoken_punctuation(&raw_target);
+            let app_words: Vec<&str> = app_name.split_whitespace().collect();
+            let has_spoken_tld = app_words
+                .last()
+                .map(|w| is_known_tld(w))
+                .unwrap_or(false);
+            let prefers_web_target = t.starts_with("visit ")
+                || t.starts_with("go to ")
+                || app_name.contains('.')
+                || app_name.starts_with("www.")
+                || app_name.starts_with("http://")
+                || app_name.starts_with("https://")
+                || raw_target.contains(" dot ")
+                || has_spoken_tld;
             
             if app_name.is_empty() {
+                return None;
+            }
+
+            // Direct URL/domain opening (e.g., "open x.com", "visit github.com")
+            if prefers_web_target {
+                if let Some(url) = infer_web_target_from_phrase(&app_name) {
+                    return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
+                }
+            }
+
+            // Long natural-language phrases that start with "open ..." are often dictation.
+            // Let LLM decide instead of forcing app launch.
+            if app_name.split_whitespace().count() > 4 {
                 return None;
             }
             
@@ -786,6 +1039,28 @@ impl GroqClient {
         if t == "show desktop" || t == "desktop" || t == "minimize all" {
             return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "show_desktop"})));
         }
+        if t == "next desktop"
+            || t == "switch to next desktop"
+            || t == "desktop right"
+            || (t.contains("switch") && t.contains("desktop") && t.contains("next"))
+        {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "next_desktop"})));
+        }
+        if t == "previous desktop"
+            || t == "switch to previous desktop"
+            || t == "desktop left"
+            || (t.contains("switch") && t.contains("desktop") && (t.contains("previous") || t.contains("back")))
+        {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "previous_desktop"})));
+        }
+        if t == "task view"
+            || t == "show desktops"
+            || t == "mission control"
+            || t == "switch desktop view"
+            || t == "desktop view"
+        {
+            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "task_view"})));
+        }
         if t == "restore" || t == "restore window" {
             return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "restore"})));
         }
@@ -794,7 +1069,8 @@ impl GroqClient {
         if t.contains("what time") || t.contains("what's the time") || t == "time" {
             let now = chrono::Local::now();
             let time_str = now.format("%I:%M %p").to_string();
-            return Some(ActionResult::respond(format!("It's {}", time_str)));
+            let tz = now.format("%Z").to_string();
+            return Some(ActionResult::respond(format!("It's {} ({})", time_str, tz)));
         }
         if t.contains("what day") || t.contains("what's today") || t.contains("today's date") || t.contains("what date") {
             let now = chrono::Local::now();
@@ -825,6 +1101,7 @@ Examples of COMMANDS (execute these):
 - "Shutdown" → system_control
 - "Volume up" → volume_control
 - "Take a screenshot" → system_control
+- "Organize my downloads" → system_control
 
 === DICTATION ===
 
@@ -915,6 +1192,7 @@ SYSTEM:
 - system_control: Trigger words: "lock", "screenshot", "sleep", "shutdown", "restart", "reboot", "brightness", "bluetooth", "wifi", "night light"
   Example: "Lock my computer" -> {"action": "system_control", "payload": {"action": "lock"}}
   Example: "Take a screenshot" -> {"action": "system_control", "payload": {"action": "screenshot"}}
+  Example: "Organize my downloads folder" -> {"action": "system_control", "payload": {"action": "organize_downloads"}}
   Example: "Shutdown the computer" -> {"action": "system_control", "payload": {"action": "shutdown"}}
   Example: "Restart" -> {"action": "system_control", "payload": {"action": "restart"}}
   Example: "Put computer to sleep" -> {"action": "system_control", "payload": {"action": "sleep"}}

@@ -407,3 +407,123 @@ export async function learnCorrection(correctedText: string): Promise<string[]> 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
+
+let activeAudio: HTMLAudioElement | null = null;
+
+export async function playTtsFromBase64(base64Audio: string): Promise<void> {
+  if (typeof window === "undefined" || !base64Audio) return;
+
+  if ("speechSynthesis" in window) {
+    fallbackSpeechQueue = [];
+    fallbackSpeechActive = false;
+    window.speechSynthesis.cancel();
+  }
+
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio.currentTime = 0;
+  }
+
+  const binary = atob(base64Audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  const blob = new Blob([bytes], { type: "audio/mpeg" });
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  activeAudio = audio;
+
+  const cleanup = () => {
+    if (activeAudio === audio) {
+      activeAudio = null;
+    }
+    URL.revokeObjectURL(url);
+  };
+  audio.onended = cleanup;
+  audio.onerror = cleanup;
+
+  await audio.play();
+}
+
+let fallbackSpeechQueue: string[] = [];
+let fallbackSpeechActive = false;
+
+function splitSpeechChunks(text: string, maxChunkChars = 220): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+
+  const sentenceLike = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  for (const sentence of sentenceLike.length > 0 ? sentenceLike : [normalized]) {
+    if (sentence.length <= maxChunkChars) {
+      chunks.push(sentence);
+      continue;
+    }
+
+    const words = sentence.split(" ");
+    let current = "";
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length <= maxChunkChars) {
+        current = candidate;
+      } else {
+        if (current) {
+          chunks.push(current);
+        }
+        current = word;
+      }
+    }
+    if (current) {
+      chunks.push(current);
+    }
+  }
+
+  return chunks;
+}
+
+function playNextFallbackSpeechChunk(): void {
+  if (typeof window === "undefined") return;
+  if (!("speechSynthesis" in window)) return;
+  if (fallbackSpeechActive) return;
+
+  const nextChunk = fallbackSpeechQueue.shift();
+  if (!nextChunk) return;
+
+  fallbackSpeechActive = true;
+  const utterance = new SpeechSynthesisUtterance(nextChunk);
+  utterance.rate = 0.9;
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
+
+  utterance.onend = () => {
+    fallbackSpeechActive = false;
+    playNextFallbackSpeechChunk();
+  };
+  utterance.onerror = () => {
+    fallbackSpeechActive = false;
+    playNextFallbackSpeechChunk();
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
+
+export function speakWithFallbackTts(text: string): void {
+  if (typeof window === "undefined") return;
+  if (!text || typeof text !== "string") return;
+  if (!("speechSynthesis" in window)) return;
+
+  try {
+    const chunks = splitSpeechChunks(text);
+    if (chunks.length === 0) return;
+    fallbackSpeechQueue.push(...chunks);
+    playNextFallbackSpeechChunk();
+  } catch {
+    // No-op fallback if speech synthesis fails.
+  }
+}

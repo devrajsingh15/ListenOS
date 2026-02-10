@@ -12,6 +12,8 @@ import {
   onShortcutPressed,
   onShortcutReleased,
   getAudioLevel,
+  playTtsFromBase64,
+  speakWithFallbackTts,
   VoiceProcessingResult,
   PendingAction,
 } from "@/lib/tauri";
@@ -23,13 +25,27 @@ type NotificationType = "first-transcription" | "word-learned" | null;
 function formatActionFeedback(result: VoiceProcessingResult): string | null {
   const actionType = result.action?.action_type;
   if (!actionType || actionType === "NoAction" || actionType === "TypeText") return null;
+  const ttsError = typeof result.action?.payload?.tts_error === "string"
+    ? result.action.payload.tts_error
+    : null;
+
+  if (ttsError && (actionType === "Respond" || actionType === "Clarify")) {
+    return `Voice reply unavailable: ${ttsError}`;
+  }
+
   switch (actionType) {
     case "OpenApp": return `Opening ${result.action?.payload?.app || "app"}`;
     case "WebSearch": return `Searching...`;
     case "OpenUrl": return "Opening URL";
     case "VolumeControl": return `Volume ${result.action?.payload?.direction}`;
     case "SpotifyControl": return `${result.action?.payload?.action}`;
-    case "SystemControl": return `${result.action?.payload?.action}`;
+    case "SystemControl":
+      return typeof result.response_text === "string" && result.response_text.length > 0
+        ? result.response_text
+        : `${result.action?.payload?.action}`;
+    case "Respond":
+    case "Clarify":
+      return result.response_text || result.action?.response_text || "Answered";
     default: return null;
   }
 }
@@ -139,6 +155,23 @@ export default function AssistantPage() {
         return;
       }
 
+      const isConversational = result.action?.action_type === "Respond" ||
+        result.action?.action_type === "Clarify";
+
+      const ttsBase64 = typeof result.action?.payload?.tts_base64 === "string"
+        ? result.action.payload.tts_base64
+        : null;
+      if (ttsBase64) {
+        void playTtsFromBase64(ttsBase64).catch((err) => {
+          console.warn("Failed to play TTS audio:", err);
+        });
+      } else {
+        const fallbackSpeech = result.response_text || result.action?.response_text;
+        if (typeof fallbackSpeech === "string" && fallbackSpeech.trim().length > 0) {
+          speakWithFallbackTts(fallbackSpeech);
+        }
+      }
+
       if (result.action?.requires_confirmation) {
         const pending = await getPendingAction();
         setPendingAction(pending);
@@ -146,19 +179,33 @@ export default function AssistantPage() {
         setState("success");
         return;
       }
+
+      if (!result.executed && result.action?.action_type !== "NoAction") {
+        const executionError = typeof result.action?.payload?.execution_error === "string"
+          ? result.action.payload.execution_error
+          : null;
+        const failureText = executionError || result.response_text || "Action failed";
+        setFeedback(failureText);
+        setState("error");
+        setTimeout(() => { setState("idle"); setFeedback(null); }, 2800);
+        return;
+      }
       
       // Check for first transcription
       transcriptionCount.current++;
       if (isFirstTranscription() && result.transcription?.text) {
         markFirstTranscriptionDone();
-        setNotification("first-transcription");
-        setTimeout(() => setNotification(null), 4000);
+        setNotification(null);
       }
       
-      const feedbackText = formatActionFeedback(result);
+      const fallbackFeedback = typeof result.action?.payload?.execution_message === "string"
+        ? result.action.payload.execution_message
+        : (result.response_text || result.action?.response_text || null);
+      const feedbackText = formatActionFeedback(result) || fallbackFeedback;
       if (feedbackText) setFeedback(feedbackText);
       setState("success");
-      setTimeout(() => { setState("idle"); setFeedback(null); }, feedbackText ? 1200 : 600);
+      const displayMs = isConversational ? 4500 : (feedbackText ? 1200 : 600);
+      setTimeout(() => { setState("idle"); setFeedback(null); }, displayMs);
     } catch {
       setState("error");
       setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
@@ -224,34 +271,16 @@ export default function AssistantPage() {
     <div className="h-full w-full flex flex-col items-center justify-end pb-2 relative" style={{ background: "transparent" }}>
       {/* Notification Popup */}
       <AnimatePresence>
-        {notification && (
+        {notification && learnedWord && (
           <motion.div
-            initial={{ opacity: 0, y: 20, scale: 0.9 }}
+            initial={{ opacity: 0, y: 12, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-            className="absolute bottom-full mb-3 px-5 py-4 rounded-2xl keep-bg max-w-xs"
-            style={{ background: "rgba(20,20,20,0.98)", border: "1px solid rgba(255,255,255,0.1)" }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            className="absolute bottom-full mb-3 h-8 px-3 rounded-full keep-bg flex items-center gap-2"
+            style={{ background: "rgba(20,20,20,0.9)", border: "1px solid rgba(255,255,255,0.12)" }}
           >
-            {notification === "first-transcription" && (
-              <div className="flex flex-col items-center gap-2 text-center">
-                <span className="text-2xl">🎉</span>
-                <span className="text-sm font-medium text-white">First transcription complete!</span>
-                <span className="text-xs text-white/60">You&apos;re all set to use voice dictation</span>
-              </div>
-            )}
-            {notification === "word-learned" && learnedWord && (
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-sm font-medium text-white">&quot;{learnedWord}&quot; added to dictionary</span>
-                  <span className="text-xs text-white/50">Will be recognized better next time</span>
-                </div>
-              </div>
-            )}
+            <div className="w-2 h-2 rounded-full bg-green-400 keep-bg" />
+            <span className="text-[10px] text-white/80 truncate max-w-36">{learnedWord}</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -288,23 +317,6 @@ export default function AssistantPage() {
         )}
       </AnimatePresence>
 
-      {/* Tooltip */}
-      <AnimatePresence>
-        {showTooltip && !notification && !pendingAction && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
-            className="absolute bottom-full mb-3 px-4 py-2 rounded-xl keep-bg whitespace-nowrap"
-            style={{ background: "rgba(20,20,20,0.95)", border: "1px solid rgba(255,255,255,0.1)" }}
-          >
-            <span className="text-sm text-white/90">
-              Click or hold <span className="text-blue-400 font-medium">Ctrl + Space</span> to start dictating
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Main Pill */}
       <motion.div
         className="relative flex items-center justify-center rounded-full cursor-pointer overflow-hidden keep-bg"
@@ -316,9 +328,6 @@ export default function AssistantPage() {
         animate={{
           width: state === "handsfree" ? 140 : (state === "listening" || state === "processing" ? 100 : 44),
           height: state === "idle" ? 20 : 24,
-          boxShadow: isActive 
-            ? "0 4px 20px rgba(0,0,0,0.4)" 
-            : "0 2px 10px rgba(0,0,0,0.3)",
         }}
         transition={{ type: "spring", stiffness: 400, damping: 30 }}
         onMouseEnter={() => setHovered(true)}
@@ -330,7 +339,7 @@ export default function AssistantPage() {
           {state === "listening" && <ListeningWave key="listening" level={audioLevel} />}
           {state === "handsfree" && <HandsfreePill key="handsfree" level={audioLevel} onCancel={cancel} onStop={stop} />}
           {state === "processing" && <ProcessingPill key="processing" />}
-          {state === "success" && <SuccessPill key="success" feedback={feedback} />}
+          {state === "success" && <SuccessPill key="success" />}
           {state === "error" && <ErrorPill key="error" />}
         </AnimatePresence>
       </motion.div>
@@ -347,7 +356,7 @@ function IdlePill() {
       className="flex items-center justify-center gap-[3px] px-2"
     >
       {[...Array(6)].map((_, i) => (
-        <div key={i} className="w-[3px] h-[3px] rounded-full" style={{ background: "rgba(255,255,255,0.4)" }} />
+        <div key={i} className="w-[3px] h-[3px] rounded-full keep-bg" style={{ background: "rgba(255,255,255,0.4)" }} />
       ))}
     </motion.div>
   );
@@ -362,7 +371,7 @@ function ListeningWave({ level }: { level: number }) {
         const baseHeight = 3;
         const maxHeight = 14;
         const height = baseHeight + (maxHeight - baseHeight) * normalizedLevel * (1 - centerDist * 0.4) * (0.6 + Math.random() * 0.4);
-        return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400" animate={{ height }} transition={{ duration: 0.05 }} />;
+        return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400 keep-bg" animate={{ height }} transition={{ duration: 0.05 }} />;
       })}
     </motion.div>
   );
@@ -372,7 +381,7 @@ function HandsfreePill({ level, onCancel, onStop }: { level: number; onCancel: (
   const normalizedLevel = Math.max(0.15, level); // Minimum animation
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-between w-full px-1">
-      <button onClick={(e) => { e.stopPropagation(); onCancel(); }} className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors">
+      <button onClick={(e) => { e.stopPropagation(); onCancel(); }} className="w-5 h-5 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors keep-bg">
         <svg className="w-3 h-3 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
@@ -383,11 +392,11 @@ function HandsfreePill({ level, onCancel, onStop }: { level: number; onCancel: (
           const baseHeight = 3;
           const maxHeight = 12;
           const height = baseHeight + (maxHeight - baseHeight) * normalizedLevel * (1 - centerDist * 0.4) * (0.6 + Math.random() * 0.4);
-          return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400" animate={{ height }} transition={{ duration: 0.05 }} />;
+          return <motion.div key={i} className="w-[2px] rounded-full bg-blue-400 keep-bg" animate={{ height }} transition={{ duration: 0.05 }} />;
         })}
       </div>
-      <button onClick={(e) => { e.stopPropagation(); onStop(); }} className="w-5 h-5 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors">
-        <div className="w-2 h-2 rounded-sm bg-white" />
+      <button onClick={(e) => { e.stopPropagation(); onStop(); }} className="w-5 h-5 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors keep-bg">
+        <div className="w-2 h-2 rounded-sm bg-white keep-bg" />
       </button>
     </motion.div>
   );
@@ -397,29 +406,38 @@ function ProcessingPill() {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-2">
       {[...Array(6)].map((_, i) => (
-        <motion.div key={i} className="w-[2px] rounded-full bg-white/60" animate={{ height: [3, 8, 3] }} transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.06 }} />
+        <motion.div key={i} className="w-[2px] rounded-full bg-white/60 keep-bg" animate={{ height: [3, 8, 3] }} transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.06 }} />
       ))}
     </motion.div>
   );
 }
 
-function SuccessPill({ feedback }: { feedback: string | null }) {
+function SuccessPill() {
   return (
-    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-1 px-2">
-      <svg className="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-      </svg>
-      {feedback && <span className="text-[10px] text-white/90 truncate max-w-16">{feedback}</span>}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-2">
+      {[...Array(8)].map((_, i) => (
+        <motion.div
+          key={i}
+          className="w-[2px] rounded-full bg-green-400 keep-bg"
+          animate={{ height: [3, 8, 3] }}
+          transition={{ duration: 0.35, repeat: Infinity, delay: i * 0.03 }}
+        />
+      ))}
     </motion.div>
   );
 }
 
 function ErrorPill() {
   return (
-    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-1 px-2">
-      <svg className="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-      </svg>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center gap-[2px] px-2">
+      {[...Array(6)].map((_, i) => (
+        <motion.div
+          key={i}
+          className="w-[2px] rounded-full bg-red-400 keep-bg"
+          animate={{ height: [3, 10, 3] }}
+          transition={{ duration: 0.45, repeat: Infinity, delay: i * 0.04 }}
+        />
+      ))}
     </motion.div>
   );
 }

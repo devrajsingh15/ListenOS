@@ -5,6 +5,10 @@
 //! Now supports both Windows and macOS.
 
 use super::{AppIntegration, IntegrationAction, IntegrationResult, ActionParameter};
+use chrono::Local;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub struct SystemControlsIntegration;
@@ -640,36 +644,335 @@ impl SystemControlsIntegration {
     }
 
     /// Take a screenshot
-    fn take_screenshot() -> Result<String, String> {
+    fn screenshots_dir() -> Result<PathBuf, String> {
         #[cfg(windows)]
         {
-            Command::new("cmd")
-                .args(["/C", "start", "ms-screenclip:"])
+            let base = std::env::var("USERPROFILE")
+                .map(PathBuf::from)
+                .map_err(|_| "Unable to resolve USERPROFILE".to_string())?;
+            let dir = base.join("Pictures").join("Screenshots");
+            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create screenshots directory: {}", e))?;
+            return Ok(dir);
+        }
+
+        #[cfg(not(windows))]
+        {
+            let base = std::env::var("HOME")
+                .map(PathBuf::from)
+                .map_err(|_| "Unable to resolve HOME".to_string())?;
+            let dir = base.join("Pictures").join("Screenshots");
+            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create screenshots directory: {}", e))?;
+            Ok(dir)
+        }
+    }
+
+    fn downloads_dir() -> Result<PathBuf, String> {
+        #[cfg(windows)]
+        {
+            let base = std::env::var("USERPROFILE")
+                .map(PathBuf::from)
+                .map_err(|_| "Unable to resolve USERPROFILE".to_string())?;
+            Ok(base.join("Downloads"))
+        }
+
+        #[cfg(not(windows))]
+        {
+            let base = std::env::var("HOME")
+                .map(PathBuf::from)
+                .map_err(|_| "Unable to resolve HOME".to_string())?;
+            Ok(base.join("Downloads"))
+        }
+    }
+
+    fn open_folder_in_file_manager(folder: &Path) -> Result<(), String> {
+        if !folder.exists() {
+            return Err(format!("Folder does not exist: {}", folder.display()));
+        }
+        if !folder.is_dir() {
+            return Err(format!("Not a folder: {}", folder.display()));
+        }
+
+        #[cfg(windows)]
+        {
+            Command::new("explorer")
+                .arg(folder)
                 .spawn()
-                .map_err(|e| format!("Failed to open screenshot tool: {}", e))?;
+                .map_err(|e| format!("Failed to open folder in Explorer: {}", e))?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .arg(folder)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder in Finder: {}", e))?;
+            return Ok(());
+        }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Command::new("xdg-open")
+                .arg(folder)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+            Ok(())
+        }
+    }
+
+    fn count_download_items(path_override: Option<&str>) -> Result<serde_json::Value, String> {
+        let downloads = match path_override {
+            Some(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
+            _ => Self::downloads_dir()?,
+        };
+
+        if !downloads.exists() {
+            return Err(format!("Downloads directory not found: {}", downloads.display()));
+        }
+        if !downloads.is_dir() {
+            return Err(format!("Not a directory: {}", downloads.display()));
+        }
+
+        let mut top_level_files = 0u64;
+        let mut top_level_folders = 0u64;
+
+        for entry in fs::read_dir(&downloads).map_err(|e| format!("Failed to read downloads: {}", e))? {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let file_type = entry.file_type().map_err(|e| format!("Failed to inspect entry: {}", e))?;
+            if file_type.is_file() {
+                top_level_files += 1;
+            } else if file_type.is_dir() {
+                top_level_folders += 1;
+            }
+        }
+
+        // Recursive totals (all nested subfolders)
+        let mut files_recursive = 0u64;
+        let mut folders_recursive = 0u64;
+        let mut stack = vec![downloads.clone()];
+
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).map_err(|e| format!("Failed to traverse {}: {}", dir.display(), e))? {
+                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+                let file_type = entry.file_type().map_err(|e| format!("Failed to inspect entry: {}", e))?;
+                if file_type.is_file() {
+                    files_recursive += 1;
+                } else if file_type.is_dir() {
+                    folders_recursive += 1;
+                    stack.push(entry.path());
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "directory": downloads.to_string_lossy().to_string(),
+            "top_level_files": top_level_files,
+            "top_level_folders": top_level_folders,
+            "top_level_total": top_level_files + top_level_folders,
+            "recursive_files": files_recursive,
+            "recursive_folders": folders_recursive,
+            "recursive_total": files_recursive + folders_recursive
+        }))
+    }
+
+    fn unique_destination_path(path: &Path) -> PathBuf {
+        if !path.exists() {
+            return path.to_path_buf();
+        }
+
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e))
+            .unwrap_or_default();
+
+        for i in 1..=999 {
+            let candidate = path.with_file_name(format!("{} ({}){}", stem, i, ext));
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+
+        path.to_path_buf()
+    }
+
+    fn move_file(source: &Path, destination: &Path) -> Result<(), String> {
+        match fs::rename(source, destination) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                fs::copy(source, destination).map_err(|e| format!("Failed to copy file: {}", e))?;
+                fs::remove_file(source).map_err(|e| format!("Failed to remove source file: {}", e))?;
+                Ok(())
+            }
+        }
+    }
+
+    fn categorize_file(path: &Path) -> &'static str {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "heic" | "tiff" => "Images",
+            "mp4" | "mkv" | "mov" | "avi" | "webm" | "m4v" => "Videos",
+            "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" => "Audio",
+            "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => "Archives",
+            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "Documents",
+            "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "java" | "c" | "cpp" | "cs" | "go" | "php" | "rb" | "sh" | "ps1" | "json" | "yaml" | "yml" | "toml" => "Code",
+            "exe" | "msi" | "dmg" | "pkg" | "deb" | "rpm" | "appimage" => "Installers",
+            _ => "Others",
+        }
+    }
+
+    fn organize_downloads(path_override: Option<&str>) -> Result<serde_json::Value, String> {
+        let downloads = match path_override {
+            Some(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
+            _ => Self::downloads_dir()?,
+        };
+
+        if !downloads.exists() {
+            return Err(format!("Downloads directory not found: {}", downloads.display()));
+        }
+        if !downloads.is_dir() {
+            return Err(format!("Not a directory: {}", downloads.display()));
+        }
+
+        let mut moved_count = 0usize;
+        let mut moved_examples: Vec<String> = Vec::new();
+        let mut by_folder: HashMap<String, usize> = HashMap::new();
+
+        for entry in fs::read_dir(&downloads).map_err(|e| format!("Failed to read downloads: {}", e))? {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let file_type = entry.file_type().map_err(|e| format!("Failed to read file type: {}", e))?;
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let source = entry.path();
+            let category = Self::categorize_file(&source).to_string();
+            let target_dir = downloads.join(&category);
+            fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create category folder: {}", e))?;
+
+            let file_name = source
+                .file_name()
+                .ok_or_else(|| "Invalid file name".to_string())?;
+            let destination = Self::unique_destination_path(&target_dir.join(file_name));
+
+            Self::move_file(&source, &destination)?;
+            moved_count += 1;
+            *by_folder.entry(category).or_insert(0) += 1;
+
+            if moved_examples.len() < 8 {
+                moved_examples.push(
+                    destination
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("moved file")
+                        .to_string(),
+                );
+            }
+        }
+
+        Ok(serde_json::json!({
+            "directory": downloads.to_string_lossy().to_string(),
+            "moved_count": moved_count,
+            "by_folder": by_folder,
+            "examples": moved_examples,
+        }))
+    }
+
+    fn take_screenshot(path_override: Option<&str>) -> Result<String, String> {
+        let final_path = match path_override {
+            Some(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
+            _ => {
+                let screenshots_dir = Self::screenshots_dir()?;
+                let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+                screenshots_dir.join(format!("screenshot_{}.png", timestamp))
+            }
+        };
+
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create screenshot directory: {}", e))?;
+        }
+
+        #[cfg(windows)]
+        {
+            let path = final_path.to_string_lossy().replace('\'', "''");
+            let script = format!(
+                r#"
+                Add-Type -AssemblyName System.Windows.Forms
+                Add-Type -AssemblyName System.Drawing
+                $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+                $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+                $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+                $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
+                $bmp.Save('{path}', [System.Drawing.Imaging.ImageFormat]::Png)
+                $graphics.Dispose()
+                $bmp.Dispose()
+                "#
+            );
+            Self::run_powershell(&script)?;
         }
         
         #[cfg(target_os = "macos")]
         {
-            // macOS: Use screencapture or open Screenshot app
-            Command::new("screencapture")
-                .args(["-i", "-c"]) // Interactive mode, copy to clipboard
-                .spawn()
-                .or_else(|_| {
-                    Command::new("open")
-                        .args(["-a", "Screenshot"])
-                        .spawn()
-                })
+            let output = Command::new("screencapture")
+                .args(["-x", &final_path.to_string_lossy()])
+                .output()
                 .map_err(|e| format!("Failed to take screenshot: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Err(format!("Screenshot command failed: {}", stderr));
+            }
         }
         
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = Command::new("gnome-screenshot").args(["-i"]).spawn()
-                .or_else(|_| Command::new("scrot").spawn());
+            let output = Command::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "gnome-screenshot -f '{}' || scrot '{}'",
+                        final_path.to_string_lossy(),
+                        final_path.to_string_lossy()
+                    ),
+                ])
+                .output()
+                .map_err(|e| format!("Failed to take screenshot: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Err(format!("Screenshot command failed: {}", stderr));
+            }
         }
-        
-        Ok("Screenshot tool opened".to_string())
+
+        // Verify screenshot file exists before reporting success.
+        let mut created = final_path.exists();
+        if !created {
+            for _ in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                if final_path.exists() {
+                    created = true;
+                    break;
+                }
+            }
+        }
+
+        if !created {
+            return Err(format!(
+                "Screenshot command completed but file was not created: {}",
+                final_path.display()
+            ));
+        }
+
+        Ok(final_path.to_string_lossy().to_string())
     }
 }
 
@@ -841,11 +1144,62 @@ impl AppIntegration for SystemControlsIntegration {
             IntegrationAction {
                 id: "system_screenshot".to_string(),
                 name: "Screenshot".to_string(),
-                description: "Take a screenshot".to_string(),
-                parameters: vec![],
+                description: "Take a screenshot and save it to disk".to_string(),
+                parameters: vec![
+                    ActionParameter {
+                        name: "path".to_string(),
+                        param_type: "string".to_string(),
+                        required: false,
+                        description: "Optional output file path".to_string(),
+                    },
+                ],
                 example_phrases: vec![
                     "take a screenshot".to_string(),
                     "capture screen".to_string(),
+                ],
+            },
+            IntegrationAction {
+                id: "system_open_screenshots_folder".to_string(),
+                name: "Open Screenshots Folder".to_string(),
+                description: "Open the folder where screenshots are saved".to_string(),
+                parameters: vec![],
+                example_phrases: vec![
+                    "open screenshot folder".to_string(),
+                    "show where screenshots are saved".to_string(),
+                ],
+            },
+            IntegrationAction {
+                id: "system_downloads_count".to_string(),
+                name: "Count Downloads".to_string(),
+                description: "Count files and folders in Downloads".to_string(),
+                parameters: vec![
+                    ActionParameter {
+                        name: "path".to_string(),
+                        param_type: "string".to_string(),
+                        required: false,
+                        description: "Optional target directory (defaults to Downloads)".to_string(),
+                    },
+                ],
+                example_phrases: vec![
+                    "how many files are in my downloads".to_string(),
+                    "count items in downloads".to_string(),
+                ],
+            },
+            IntegrationAction {
+                id: "system_organize_downloads".to_string(),
+                name: "Organize Downloads".to_string(),
+                description: "Organize files in Downloads into folders by file type".to_string(),
+                parameters: vec![
+                    ActionParameter {
+                        name: "path".to_string(),
+                        param_type: "string".to_string(),
+                        required: false,
+                        description: "Optional target directory (defaults to Downloads)".to_string(),
+                    },
+                ],
+                example_phrases: vec![
+                    "organize my downloads folder".to_string(),
+                    "sort downloads by file type".to_string(),
                 ],
             },
             IntegrationAction {
@@ -954,8 +1308,61 @@ impl AppIntegration for SystemControlsIntegration {
             }
             
             "system_screenshot" => {
-                let result = Self::take_screenshot()?;
-                Ok(IntegrationResult::success(result))
+                let path = params.get("path").and_then(|v| v.as_str());
+                let saved_path = Self::take_screenshot(path)?;
+                Ok(IntegrationResult::success_with_data(
+                    format!("Screenshot saved to {}", saved_path),
+                    serde_json::json!({ "path": saved_path }),
+                ))
+            }
+
+            "system_open_screenshots_folder" => {
+                let screenshots_dir = Self::screenshots_dir()?;
+                Self::open_folder_in_file_manager(&screenshots_dir)?;
+                Ok(IntegrationResult::success_with_data(
+                    format!("Opened screenshots folder: {}", screenshots_dir.display()),
+                    serde_json::json!({ "path": screenshots_dir.to_string_lossy().to_string() }),
+                ))
+            }
+
+            "system_downloads_count" => {
+                let path = params.get("path").and_then(|v| v.as_str());
+                let result = Self::count_download_items(path)?;
+                let top_level_total = result
+                    .get("top_level_total")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let recursive_total = result
+                    .get("recursive_total")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                Ok(IntegrationResult::success_with_data(
+                    format!(
+                        "Downloads has {} top-level items and {} total items recursively",
+                        top_level_total, recursive_total
+                    ),
+                    result,
+                ))
+            }
+
+            "system_organize_downloads" => {
+                let path = params.get("path").and_then(|v| v.as_str());
+                let result = Self::organize_downloads(path)?;
+                let moved_count = result
+                    .get("moved_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if moved_count == 0 {
+                    Ok(IntegrationResult::success_with_data(
+                        "Downloads already organized (no loose files found)".to_string(),
+                        result,
+                    ))
+                } else {
+                    Ok(IntegrationResult::success_with_data(
+                        format!("Organized Downloads: moved {} file(s)", moved_count),
+                        result,
+                    ))
+                }
             }
             
             "system_recycle_bin" => {
