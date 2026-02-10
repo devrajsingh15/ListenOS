@@ -12,6 +12,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "tauri:build:mac:dmg": "tauri build --bundles dmg",
+    "tauri:build:windows:nsis": "tauri build --bundles nsis",
     "server:dev": "npm run dev --prefix server",
     "server:build": "npm run build --prefix server",
     "server:start": "npm run start --prefix server",

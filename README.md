@@ -2,7 +2,7 @@
 
 > **AI-Powered Voice Control System for Windows & macOS**
 
-ListenOS is a native desktop application that lets you control your computer using natural voice commands. Simply hold **Ctrl+Space** (Windows) or **Cmd+Space** (macOS), speak your command, and watch it execute instantly.
+ListenOS is a native desktop application that lets you control your computer using natural voice commands. By default, hold **Ctrl+Space** to talk, speak your command, and release to execute.
 
 ![ListenOS Demo](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue) ![Tauri 2.0](https://img.shields.io/badge/Tauri-2.0-orange) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![Rust](https://img.shields.io/badge/Rust-stable-red)
 
@@ -61,6 +61,28 @@ ListenOS is a native desktop application that lets you control your computer usi
    bun run tauri:build
    ```
    The installer will be created in `backend/target/release/bundle/`
+
+### macOS DMG Build (Testing)
+
+To build a macOS DMG package on a macOS machine:
+
+```bash
+npm run tauri:build:mac:dmg
+```
+
+Output path:
+
+`backend/target/release/bundle/dmg/`
+
+Quick validation on macOS:
+
+```bash
+hdiutil verify backend/target/release/bundle/dmg/*.dmg
+```
+
+Post-install validation checklist:
+
+`docs/macos-smoke-test-checklist.md`
 
 ## 🎮 Usage
 
@@ -167,6 +189,8 @@ ListenOS/
 | `npm run dev` | Start Next.js development server |
 | `npm run tauri:dev` | Start Tauri in development mode |
 | `npm run tauri:build` | Build production installer |
+| `npm run tauri:build:mac:dmg` | Build macOS DMG package |
+| `npm run tauri:build:windows:nsis` | Build Windows NSIS installer |
 | `npm run lint` | Run ESLint |
 
 ### Debugging

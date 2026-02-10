@@ -1,0 +1,67 @@
+name: "macOS Compatibility"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  macos-dmg-build-and-verify:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build Next.js frontend
+        run: npm run build
+
+      - name: Build macOS DMG
+        run: npm run tauri:build:mac:dmg
+
+      - name: Locate DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG_PATH="$(find backend/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' | head -n 1)"
+          if [[ -z "${DMG_PATH}" ]]; then
+            echo "No DMG file found in backend/target/release/bundle/dmg"
+            exit 1
+          fi
+          echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
+          echo "Found DMG: ${DMG_PATH}"
+
+      - name: Verify DMG image integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          hdiutil verify "${DMG_PATH}"
+
+      - name: Mount DMG and verify app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          MOUNT_POINT="$(mktemp -d /tmp/listenos-dmg.XXXXXX)"
+          hdiutil attach "${DMG_PATH}" -mountpoint "${MOUNT_POINT}" -nobrowse -quiet
+          test -d "${MOUNT_POINT}/ListenOS.app"
+          hdiutil detach "${MOUNT_POINT}" -quiet
+          rm -rf "${MOUNT_POINT}"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: listenos-macos-dmg
+          path: ${{ env.DMG_PATH }}
