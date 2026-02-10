@@ -1,7 +1,7 @@
 //! Application configuration module
 
+use crate::ai::{AIProvider, LLMConfig, WhisperConfig};
 use serde::{Deserialize, Serialize};
-use crate::ai::{WhisperConfig, LLMConfig, AIProvider};
 use std::path::PathBuf;
 
 /// Application configuration
@@ -9,39 +9,44 @@ use std::path::PathBuf;
 pub struct AppConfig {
     /// Hotkey to trigger listening (e.g., "Ctrl+Space")
     pub trigger_hotkey: String,
-    
+
     /// Mode: "push_to_talk" or "toggle"
     pub listening_mode: ListeningMode,
-    
+
     /// Auto-copy transcription to clipboard
     pub auto_copy: bool,
-    
+
     /// Whisper/STT configuration
     pub whisper: WhisperConfig,
-    
+
     /// LLM configuration
     pub llm: LLMConfig,
-    
+
     /// AI provider to use
     pub ai_provider: AIProvider,
-    
+
     /// API keys for external providers
     pub api_keys: ApiKeys,
-    
+
     /// UI preferences
     pub ui: UIConfig,
-    
+
     /// Sound feedback enabled
     pub sound_feedback: bool,
-    
+
     /// Auto-start on system boot
     pub auto_start: bool,
-    
+
     /// Dictation style settings per context
     pub dictation_style: DictationStyleConfig,
 
     /// Speech input and output language preferences for multilingual mode
+    #[serde(default)]
     pub language_preferences: LanguagePreferences,
+
+    /// Vibe coding prompt enhancement settings
+    #[serde(default)]
+    pub vibe_coding: VibeCodingConfig,
 }
 
 /// Multilingual language preferences.
@@ -65,8 +70,8 @@ impl LanguagePreferences {
     }
 
     fn storage_path() -> Result<PathBuf, String> {
-        let data_dir = dirs_next::data_dir()
-            .ok_or_else(|| "Could not find data directory".to_string())?;
+        let data_dir =
+            dirs_next::data_dir().ok_or_else(|| "Could not find data directory".to_string())?;
         Ok(data_dir.join("ListenOS").join("language_preferences.json"))
     }
 
@@ -96,6 +101,100 @@ impl Default for LanguagePreferences {
         Self {
             source_language: "en".to_string(),
             target_language: "en".to_string(),
+        }
+    }
+}
+
+/// Controls for enhancing spoken prompts before sending to AI coding tools.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VibeCodingConfig {
+    /// Master toggle.
+    pub enabled: bool,
+    /// Activation behavior.
+    pub activation_mode: VibeActivationMode,
+    /// Spoken prefix that forces enhancement in manual mode.
+    pub trigger_phrase: String,
+    /// Preferred coding tool context.
+    pub target_tool: VibeTargetTool,
+    /// Prompt detail level.
+    pub detail_level: VibeDetailLevel,
+    /// Include explicit constraints section in enhanced prompt.
+    pub include_constraints: bool,
+    /// Include acceptance criteria section in enhanced prompt.
+    pub include_acceptance_criteria: bool,
+    /// Include test cases/checklist section in enhanced prompt.
+    pub include_test_notes: bool,
+    /// Preserve concise style for fast iteration.
+    pub concise_output: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VibeActivationMode {
+    /// Enhance only when trigger phrase is spoken.
+    ManualOnly,
+    /// Enhance when trigger phrase is spoken or an AI coding app is active.
+    SmartAuto,
+    /// Always enhance typed dictation prompts.
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VibeTargetTool {
+    Generic,
+    Cursor,
+    Windsurf,
+    Claude,
+    ChatGPT,
+    Copilot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VibeDetailLevel {
+    Concise,
+    Balanced,
+    Detailed,
+}
+
+impl VibeCodingConfig {
+    fn storage_path() -> Result<PathBuf, String> {
+        let data_dir =
+            dirs_next::data_dir().ok_or_else(|| "Could not find data directory".to_string())?;
+        Ok(data_dir.join("ListenOS").join("vibe_coding.json"))
+    }
+
+    pub fn load_from_disk() -> Option<Self> {
+        let path = Self::storage_path().ok()?;
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str::<Self>(&content).ok()
+    }
+
+    pub fn save_to_disk(&self) -> Result<(), String> {
+        let path = Self::storage_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create vibe config directory: {}", e))?;
+        }
+
+        let payload = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize vibe coding config: {}", e))?;
+        std::fs::write(&path, payload)
+            .map_err(|e| format!("Failed to write vibe coding config: {}", e))?;
+        Ok(())
+    }
+}
+
+impl Default for VibeCodingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            activation_mode: VibeActivationMode::SmartAuto,
+            trigger_phrase: "vibe".to_string(),
+            target_tool: VibeTargetTool::Generic,
+            detail_level: VibeDetailLevel::Balanced,
+            include_constraints: true,
+            include_acceptance_criteria: true,
+            include_test_notes: false,
+            concise_output: false,
         }
     }
 }
@@ -140,7 +239,7 @@ impl Default for AppConfig {
         // Use Ctrl+Space on all platforms (Cmd+Space conflicts with Spotlight on macOS)
         // Users can customize this in settings
         let default_hotkey = "Ctrl+Space".to_string();
-        
+
         Self {
             trigger_hotkey: default_hotkey,
             listening_mode: ListeningMode::PushToTalk,
@@ -154,6 +253,7 @@ impl Default for AppConfig {
             auto_start: true,
             dictation_style: DictationStyleConfig::default(),
             language_preferences: LanguagePreferences::default(),
+            vibe_coding: VibeCodingConfig::default(),
         }
     }
 }
@@ -183,19 +283,19 @@ pub struct ApiKeys {
 pub struct UIConfig {
     /// Theme: "dark" or "light"
     pub theme: String,
-    
+
     /// Accent color (hex)
     pub accent_color: String,
-    
+
     /// Window opacity (0.0 - 1.0)
     pub opacity: f32,
-    
+
     /// Show transcription in overlay
     pub show_transcription: bool,
-    
+
     /// Overlay position
     pub overlay_position: OverlayPosition,
-    
+
     /// Window size
     pub window_width: u32,
     pub window_height: u32,

@@ -143,6 +143,22 @@ export interface LanguagePreferences {
   target_language: string;
 }
 
+export type VibeActivationMode = "ManualOnly" | "SmartAuto" | "Always";
+export type VibeTargetTool = "Generic" | "Cursor" | "Windsurf" | "Claude" | "ChatGPT" | "Copilot";
+export type VibeDetailLevel = "Concise" | "Balanced" | "Detailed";
+
+export interface VibeCodingConfig {
+  enabled: boolean;
+  activation_mode: VibeActivationMode;
+  trigger_phrase: string;
+  target_tool: VibeTargetTool;
+  detail_level: VibeDetailLevel;
+  include_constraints: boolean;
+  include_acceptance_criteria: boolean;
+  include_test_notes: boolean;
+  concise_output: boolean;
+}
+
 export async function getLanguagePreferences(): Promise<LanguagePreferences> {
   return invoke("get_language_preferences");
 }
@@ -159,6 +175,16 @@ export async function setLanguagePreferences(
     source_language: sourceLanguage,
     target_language: targetLanguage,
   });
+}
+
+export async function getVibeCodingConfig(): Promise<VibeCodingConfig> {
+  return invoke("get_vibe_coding_config");
+}
+
+export async function setVibeCodingConfig(
+  config: VibeCodingConfig,
+): Promise<VibeCodingConfig> {
+  return invoke("set_vibe_coding_config", { config });
 }
 
 // ============ Action Commands ============

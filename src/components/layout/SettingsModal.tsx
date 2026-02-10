@@ -11,7 +11,10 @@ import {
   setTriggerHotkey,
   getLanguagePreferences,
   setLanguagePreferences,
+  getVibeCodingConfig,
+  setVibeCodingConfig,
 } from "@/lib/tauri";
+import type { VibeCodingConfig } from "@/lib/tauri";
 import { checkForUpdates } from "@/lib/updater";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -83,9 +86,59 @@ const SOURCE_LANGUAGE_OPTIONS = [
 
 const TARGET_LANGUAGE_OPTIONS = SOURCE_LANGUAGE_OPTIONS.filter((option) => option.value !== "auto");
 
+const VIBE_ACTIVATION_OPTIONS: Array<{
+  value: VibeCodingConfig["activation_mode"];
+  label: string;
+  description: string;
+}> = [
+  { value: "SmartAuto", label: "Smart auto", description: "Auto-enhance in coding apps and for coding-like prompts." },
+  { value: "ManualOnly", label: "Manual trigger", description: "Enhance only when you start with the trigger phrase." },
+  { value: "Always", label: "Always on", description: "Enhance every typed dictation prompt." },
+];
+
+const VIBE_TARGET_TOOL_OPTIONS: Array<{
+  value: VibeCodingConfig["target_tool"];
+  label: string;
+}> = [
+  { value: "Generic", label: "Generic" },
+  { value: "Cursor", label: "Cursor" },
+  { value: "Windsurf", label: "Windsurf" },
+  { value: "Claude", label: "Claude" },
+  { value: "ChatGPT", label: "ChatGPT" },
+  { value: "Copilot", label: "GitHub Copilot" },
+];
+
+const VIBE_DETAIL_LEVEL_OPTIONS: Array<{
+  value: VibeCodingConfig["detail_level"];
+  label: string;
+}> = [
+  { value: "Concise", label: "Concise" },
+  { value: "Balanced", label: "Balanced" },
+  { value: "Detailed", label: "Detailed" },
+];
+
+const DEFAULT_VIBE_CONFIG: VibeCodingConfig = {
+  enabled: false,
+  activation_mode: "SmartAuto",
+  trigger_phrase: "vibe",
+  target_tool: "Generic",
+  detail_level: "Balanced",
+  include_constraints: true,
+  include_acceptance_criteria: true,
+  include_test_notes: false,
+  concise_output: false,
+};
+
 function getLanguageLabel(code: string, source = false): string {
   const options = source ? SOURCE_LANGUAGE_OPTIONS : TARGET_LANGUAGE_OPTIONS;
   return options.find((option) => option.value === code)?.label ?? code;
+}
+
+function getVibeActivationDescription(mode: VibeCodingConfig["activation_mode"]): string {
+  return (
+    VIBE_ACTIVATION_OPTIONS.find((option) => option.value === mode)?.description ??
+    "Auto-enhance prompts."
+  );
 }
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
@@ -206,6 +259,9 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const [sourceLanguage, setSourceLanguage] = useState("en");
   const [targetLanguage, setTargetLanguage] = useState(settings?.language ?? "en");
   const [autostartLoading, setAutostartLoading] = useState(false);
+  const [vibeConfig, setVibeConfigState] = useState<VibeCodingConfig>(DEFAULT_VIBE_CONFIG);
+  const [vibeSaving, setVibeSaving] = useState(false);
+  const [vibeLoading, setVibeLoading] = useState(false);
 
   // Load actual autostart state on mount
   useEffect(() => {
@@ -224,6 +280,15 @@ function SettingsContent({ section }: { section: SettingsSection }) {
           setTargetLanguage(prefs.target_language);
         })
         .catch((err) => console.error("Failed to get language preferences:", err));
+
+      setVibeLoading(true);
+      getVibeCodingConfig()
+        .then((config) => setVibeConfigState(config))
+        .catch((err) => {
+          console.error("Failed to load vibe coding config:", err);
+          setUpdateStatus("Failed to load vibe coding settings");
+        })
+        .finally(() => setVibeLoading(false));
     }
   }, []);
 
@@ -331,6 +396,34 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       console.error("Failed to sync target language setting:", err);
     }
   }, [sourceLanguage, targetLanguage, updateSettings]);
+
+  const applyVibeConfig = useCallback(async (patch: Partial<VibeCodingConfig>) => {
+    const previous = vibeConfig;
+    const trigger = (patch.trigger_phrase ?? previous.trigger_phrase).trim().toLowerCase();
+    const next: VibeCodingConfig = {
+      ...previous,
+      ...patch,
+      trigger_phrase: trigger.length > 0 ? trigger : "vibe",
+    };
+
+    setVibeConfigState(next);
+
+    if (!isTauri()) {
+      return;
+    }
+
+    setVibeSaving(true);
+    try {
+      const saved = await setVibeCodingConfig(next);
+      setVibeConfigState(saved);
+    } catch (err) {
+      console.error("Failed to save vibe coding config:", err);
+      setVibeConfigState(previous);
+      setUpdateStatus("Failed to update vibe coding settings");
+    } finally {
+      setVibeSaving(false);
+    }
+  }, [vibeConfig]);
 
   const applyShortcut = useCallback(async (rawShortcut: string) => {
     if (isTauri()) {
@@ -515,9 +608,144 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Vibe coding</h2>
-          <p className="text-muted mb-4">Configure voice-to-code settings for development workflows.</p>
-          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
-            <p className="text-sm text-muted">Coming soon! Voice-to-code features are being developed.</p>
+          <p className="mb-4 text-muted">
+            Turn rough spoken coding ideas into clean, structured prompts before they are pasted.
+          </p>
+          <div className="space-y-6">
+            <SettingsRow
+              label="Enable vibe coding"
+              description="Rewrite voice dictation into stronger AI coding prompts."
+              action={
+                <ToggleSwitch
+                  checked={vibeConfig.enabled}
+                  onChange={(checked) => void applyVibeConfig({ enabled: checked })}
+                  disabled={vibeSaving || vibeLoading}
+                />
+              }
+            />
+            <SettingsRow
+              label="Activation mode"
+              description={getVibeActivationDescription(vibeConfig.activation_mode)}
+              action={
+                <select
+                  value={vibeConfig.activation_mode}
+                  onChange={(e) => void applyVibeConfig({ activation_mode: e.target.value as VibeCodingConfig["activation_mode"] })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                >
+                  {VIBE_ACTIVATION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+            <SettingsRow
+              label="Trigger phrase"
+              description={`Say this first in manual mode. Example: "${vibeConfig.trigger_phrase} build a Tauri command..."`}
+              action={
+                <input
+                  value={vibeConfig.trigger_phrase}
+                  onChange={(e) => setVibeConfigState((prev) => ({ ...prev, trigger_phrase: e.target.value }))}
+                  onBlur={(e) => void applyVibeConfig({ trigger_phrase: e.target.value })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                  className="w-44 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors disabled:opacity-50"
+                  placeholder="vibe"
+                />
+              }
+            />
+            <SettingsRow
+              label="Target AI tool"
+              description="Tune wording for your primary coding assistant."
+              action={
+                <select
+                  value={vibeConfig.target_tool}
+                  onChange={(e) => void applyVibeConfig({ target_tool: e.target.value as VibeCodingConfig["target_tool"] })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                >
+                  {VIBE_TARGET_TOOL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+            <SettingsRow
+              label="Prompt detail level"
+              description="Control how concise or detailed rewritten prompts should be."
+              action={
+                <select
+                  value={vibeConfig.detail_level}
+                  onChange={(e) => void applyVibeConfig({ detail_level: e.target.value as VibeCodingConfig["detail_level"] })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                >
+                  {VIBE_DETAIL_LEVEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+            <SettingsRow
+              label="Include constraints"
+              description="Ask AI to keep boundaries explicit (stack, scope, limits)."
+              action={
+                <ToggleSwitch
+                  checked={vibeConfig.include_constraints}
+                  onChange={(checked) => void applyVibeConfig({ include_constraints: checked })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                />
+              }
+            />
+            <SettingsRow
+              label="Include acceptance criteria"
+              description="Add clear completion criteria for better first-pass output."
+              action={
+                <ToggleSwitch
+                  checked={vibeConfig.include_acceptance_criteria}
+                  onChange={(checked) => void applyVibeConfig({ include_acceptance_criteria: checked })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                />
+              }
+            />
+            <SettingsRow
+              label="Include test checklist"
+              description="Add test and verification notes to improve reliability."
+              action={
+                <ToggleSwitch
+                  checked={vibeConfig.include_test_notes}
+                  onChange={(checked) => void applyVibeConfig({ include_test_notes: checked })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                />
+              }
+            />
+            <SettingsRow
+              label="Concise output bias"
+              description="Prefer shorter prompts for rapid AI iteration."
+              action={
+                <ToggleSwitch
+                  checked={vibeConfig.concise_output}
+                  onChange={(checked) => void applyVibeConfig({ concise_output: checked })}
+                  disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
+                />
+              }
+            />
+
+            <div className="rounded-lg border border-border bg-sidebar-bg p-4">
+              <p className="mb-1 text-sm font-medium text-foreground">Live behavior</p>
+              <p className="text-sm text-muted">
+                Spoken coding requests are rewritten before paste. Commands like opening apps or taking screenshots
+                still execute normally and skip vibe rewriting.
+              </p>
+              {(vibeSaving || vibeLoading) && (
+                <p className="mt-2 text-xs text-muted">Syncing settings...</p>
+              )}
+            </div>
           </div>
         </div>
       );

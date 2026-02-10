@@ -8,7 +8,13 @@ pub mod custom;
 use crate::AppState;
 use crate::audio::AudioDevice;
 use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
-use crate::config::LanguagePreferences;
+use crate::config::{
+    LanguagePreferences,
+    VibeActivationMode,
+    VibeCodingConfig,
+    VibeDetailLevel,
+    VibeTargetTool,
+};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -99,6 +105,11 @@ struct MultilingualTextResult {
     routing_text: String,
     output_text: String,
     transformed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VibeEnhancementRewrite {
+    enhanced_prompt: Option<String>,
 }
 
 fn normalize_language_code(raw: &str, allow_auto: bool) -> String {
@@ -267,6 +278,345 @@ async fn transform_multilingual_text(
     })
 }
 
+fn normalize_vibe_trigger_phrase(raw: &str) -> String {
+    let cleaned = raw.trim().to_lowercase();
+    if cleaned.is_empty() {
+        return "vibe".to_string();
+    }
+
+    cleaned.chars().take(32).collect::<String>()
+}
+
+fn normalized_vibe_coding_config(config: &VibeCodingConfig) -> VibeCodingConfig {
+    let mut normalized = config.clone();
+    normalized.trigger_phrase = normalize_vibe_trigger_phrase(&normalized.trigger_phrase);
+    normalized
+}
+
+fn vibe_target_tool_name(target_tool: VibeTargetTool) -> &'static str {
+    match target_tool {
+        VibeTargetTool::Generic => "Generic AI coding assistant",
+        VibeTargetTool::Cursor => "Cursor",
+        VibeTargetTool::Windsurf => "Windsurf",
+        VibeTargetTool::Claude => "Claude",
+        VibeTargetTool::ChatGPT => "ChatGPT",
+        VibeTargetTool::Copilot => "GitHub Copilot",
+    }
+}
+
+fn strip_trigger_phrase_prefix(text: &str, trigger_phrase: &str) -> (String, bool) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return (String::new(), false);
+    }
+
+    let trigger = normalize_vibe_trigger_phrase(trigger_phrase);
+    if trigger.is_empty() {
+        return (trimmed.to_string(), false);
+    }
+
+    let lowered = trimmed.to_lowercase();
+    let candidates = [
+        trigger.clone(),
+        format!("{}:", trigger),
+        format!("{} -", trigger),
+        format!("{}.", trigger),
+        format!("hey {}", trigger),
+        format!("{} mode", trigger),
+        format!("{} prompt", trigger),
+    ];
+
+    for candidate in candidates {
+        let matched = if candidate == trigger {
+            lowered == trigger
+                || lowered.starts_with(&format!("{} ", trigger))
+                || lowered.starts_with(&format!("{}:", trigger))
+                || lowered.starts_with(&format!("{}.", trigger))
+                || lowered.starts_with(&format!("{} -", trigger))
+        } else {
+            lowered.starts_with(&candidate)
+        };
+
+        if matched {
+            let cut_chars = candidate.chars().count();
+            let byte_index = trimmed
+                .char_indices()
+                .nth(cut_chars)
+                .map(|(idx, _)| idx)
+                .unwrap_or(trimmed.len());
+            let stripped = trimmed[byte_index..]
+                .trim_start_matches(|c: char| {
+                    c == ':' || c == '-' || c == ',' || c == ';' || c.is_whitespace()
+                })
+                .trim()
+                .to_string();
+            return (stripped, true);
+        }
+    }
+
+    (trimmed.to_string(), false)
+}
+
+fn is_coding_surface_app(app_name: &str) -> bool {
+    let app = app_name.to_lowercase();
+    let coding_apps = [
+        "cursor",
+        "windsurf",
+        "visual studio code",
+        "vscode",
+        "code",
+        "visual studio",
+        "intellij",
+        "pycharm",
+        "webstorm",
+        "goland",
+        "clion",
+        "rider",
+        "android studio",
+        "xcode",
+        "zed",
+        "sublime",
+        "neovim",
+        "vim",
+        "terminal",
+        "powershell",
+        "command prompt",
+        "cmd",
+        "warp",
+        "iterm",
+        "kitty",
+        "alacritty",
+        "copilot",
+        "chatgpt",
+        "claude",
+        "aider",
+        "replit",
+        "bolt",
+        "lovable",
+    ];
+
+    coding_apps.iter().any(|keyword| app.contains(keyword))
+}
+
+fn looks_like_coding_prompt_request(text: &str) -> bool {
+    let normalized = normalize_spoken_command_text(text);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let coding_keywords = [
+        "bug",
+        "fix",
+        "refactor",
+        "function",
+        "method",
+        "class",
+        "component",
+        "api",
+        "endpoint",
+        "typescript",
+        "javascript",
+        "rust",
+        "python",
+        "react",
+        "tauri",
+        "compile",
+        "build",
+        "test",
+        "unit test",
+        "integration test",
+        "codebase",
+        "repository",
+        "git",
+        "stack trace",
+        "error",
+        "exception",
+        "optimize",
+    ];
+
+    coding_keywords
+        .iter()
+        .any(|keyword| normalized.contains(keyword))
+}
+
+fn should_apply_vibe_enhancement(
+    transcription_text: &str,
+    context: &VoiceContext,
+    vibe_config: &VibeCodingConfig,
+) -> Option<(String, &'static str)> {
+    if !vibe_config.enabled {
+        return None;
+    }
+
+    let trigger_phrase = normalize_vibe_trigger_phrase(&vibe_config.trigger_phrase);
+    let (text_without_trigger, stripped_prefix) =
+        strip_trigger_phrase_prefix(transcription_text, &trigger_phrase);
+
+    let normalized_text = normalize_spoken_command_text(transcription_text);
+    let trigger_with_space = format!("{} ", trigger_phrase);
+    let trigger_with_colon = format!("{}:", trigger_phrase);
+    let trigger_detected = stripped_prefix
+        || normalized_text == trigger_phrase
+        || normalized_text.starts_with(&trigger_with_space)
+        || normalized_text.starts_with(&trigger_with_colon);
+
+    let source_text = if text_without_trigger.trim().is_empty() {
+        if stripped_prefix {
+            return None;
+        }
+        transcription_text.trim().to_string()
+    } else {
+        text_without_trigger.trim().to_string()
+    };
+    if source_text.is_empty() {
+        return None;
+    }
+
+    let coding_app_active = context
+        .active_app
+        .as_ref()
+        .map(|app| is_coding_surface_app(app))
+        .unwrap_or(false);
+    let coding_prompt = looks_like_coding_prompt_request(&source_text);
+
+    let decision = match vibe_config.activation_mode {
+        VibeActivationMode::ManualOnly => trigger_detected.then_some("manual_trigger"),
+        VibeActivationMode::Always => Some("always"),
+        VibeActivationMode::SmartAuto => {
+            if trigger_detected {
+                Some("manual_trigger")
+            } else if coding_app_active {
+                Some("coding_app_active")
+            } else if coding_prompt {
+                Some("coding_prompt_detected")
+            } else {
+                None
+            }
+        }
+    };
+
+    decision.map(|reason| (source_text, reason))
+}
+
+async fn enhance_vibe_coding_prompt(
+    original_text: &str,
+    language_preferences: &LanguagePreferences,
+    vibe_config: &VibeCodingConfig,
+) -> Result<String, String> {
+    let base = original_text.trim();
+    if base.is_empty() {
+        return Err("Vibe enhancement skipped: empty text".to_string());
+    }
+
+    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| cloud::get_groq_key());
+    if api_key.trim().is_empty() {
+        return Err("Missing GROQ_API_KEY for vibe prompt enhancement".to_string());
+    }
+
+    let detail_instruction = match vibe_config.detail_level {
+        VibeDetailLevel::Concise => {
+            "Keep the prompt compact: one short objective plus minimal bullet points."
+        }
+        VibeDetailLevel::Balanced => {
+            "Provide a clear objective and practical implementation notes without overexplaining."
+        }
+        VibeDetailLevel::Detailed => {
+            "Provide a full implementation brief with concrete steps and explicit edge cases."
+        }
+    };
+
+    let mut sections: Vec<&str> = vec!["Task"];
+    if vibe_config.include_constraints {
+        sections.push("Constraints");
+    }
+    if vibe_config.include_acceptance_criteria {
+        sections.push("Acceptance Criteria");
+    }
+    if vibe_config.include_test_notes {
+        sections.push("Validation Checklist");
+    }
+
+    let target_language = language_name(&language_preferences.target_language);
+    let target_tool = vibe_target_tool_name(vibe_config.target_tool);
+    let concise_preference = if vibe_config.concise_output {
+        "Prioritize short wording and avoid unnecessary filler."
+    } else {
+        "Be explicit when needed, but keep the prompt practical."
+    };
+    let section_line = format!("Use these sections when relevant: {}.", sections.join(", "));
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": "llama-3.3-70b-versatile",
+            "temperature": 0.2,
+            "max_tokens": 520,
+            "response_format": { "type": "json_object" },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You rewrite rough spoken coding ideas into high-quality prompts for AI coding assistants. Preserve user intent and never invent missing requirements. Return STRICT JSON: {\"enhanced_prompt\":\"...\"}. No markdown fences. No extra keys."
+                },
+                {
+                    "role": "user",
+                    "content": format!(
+                        "target_tool: {}\ntarget_language: {}\ndetail_level: {:?}\n{}\n{}\n{}\nspoken_text: {}",
+                        target_tool,
+                        target_language,
+                        vibe_config.detail_level,
+                        detail_instruction,
+                        concise_preference,
+                        section_line,
+                        base
+                    )
+                }
+            ]
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Vibe enhancement request failed: {}", e))?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Vibe enhancement failed [{}]: {}", status, body));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse vibe enhancement response: {}", e))?;
+
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim();
+    if content.is_empty() {
+        return Err("Vibe enhancement returned empty content".to_string());
+    }
+
+    let cleaned_content = content
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let rewrite: VibeEnhancementRewrite = serde_json::from_str(cleaned_content)
+        .map_err(|e| format!("Failed to parse vibe enhancement payload: {}", e))?;
+    let enhanced = rewrite
+        .enhanced_prompt
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if enhanced.is_empty() {
+        return Err("Vibe enhancement returned an empty prompt".to_string());
+    }
+
+    Ok(enhanced)
+}
+
 // ============ Core Voice Commands ============
 
 /// Start listening for voice input
@@ -409,9 +759,12 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         Ok(store) => store.get_words_for_recognition().unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    let language_preferences = {
+    let (language_preferences, vibe_config) = {
         let config = state.config.lock().await;
-        normalized_language_preferences(&config.language_preferences)
+        (
+            normalized_language_preferences(&config.language_preferences),
+            normalized_vibe_coding_config(&config.vibe_coding),
+        )
     };
     let transcription_language_hint = language_preferences
         .transcription_language_hint()
@@ -846,6 +1199,52 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
 
     if multilingual.transformed && action.action_type == ActionType::TypeText {
         action.refined_text = Some(transcription.text.clone());
+    }
+
+    if action.action_type == ActionType::TypeText {
+        let candidate_text = action
+            .refined_text
+            .clone()
+            .unwrap_or_else(|| transcription.text.clone());
+
+        if let Some((vibe_input, activation_reason)) =
+            should_apply_vibe_enhancement(&candidate_text, &context, &vibe_config)
+        {
+            // Remove explicit trigger phrase from typed output even if enhancement fails.
+            action.refined_text = Some(vibe_input.clone());
+
+            match enhance_vibe_coding_prompt(&vibe_input, &language_preferences, &vibe_config).await
+            {
+                Ok(enhanced_prompt) => {
+                    action.refined_text = Some(enhanced_prompt);
+                    upsert_action_payload_field(
+                        &mut action,
+                        "vibe_enhanced",
+                        serde_json::Value::Bool(true),
+                    );
+                    upsert_action_payload_field(
+                        &mut action,
+                        "vibe_activation_reason",
+                        serde_json::Value::String(activation_reason.to_string()),
+                    );
+                    upsert_action_payload_field(
+                        &mut action,
+                        "vibe_target_tool",
+                        serde_json::Value::String(
+                            vibe_target_tool_name(vibe_config.target_tool).to_string(),
+                        ),
+                    );
+                }
+                Err(err) => {
+                    log::warn!("Vibe prompt enhancement skipped due to error: {}", err);
+                    upsert_action_payload_field(
+                        &mut action,
+                        "vibe_enhancement_error",
+                        serde_json::Value::String(err),
+                    );
+                }
+            }
+        }
     }
 
     let confirms_enabled = confirmations_enabled();
@@ -3327,6 +3726,7 @@ pub async fn set_config(
     let mut config = config;
     config.trigger_hotkey = normalize_hotkey_string(&config.trigger_hotkey)?;
     config.language_preferences = normalized_language_preferences(&config.language_preferences);
+    config.vibe_coding = normalized_vibe_coding_config(&config.vibe_coding);
 
     let mut current_config = state.config.lock().await;
     
@@ -3341,6 +3741,9 @@ pub async fn set_config(
     *current_config = config;
     if let Err(err) = current_config.language_preferences.save_to_disk() {
         log::warn!("Failed to persist language preferences: {}", err);
+    }
+    if let Err(err) = current_config.vibe_coding.save_to_disk() {
+        log::warn!("Failed to persist vibe coding config: {}", err);
     }
     Ok(true)
 }
@@ -3389,6 +3792,30 @@ pub async fn set_language_preferences(
     if let Err(err) = config.language_preferences.save_to_disk() {
         log::warn!("Failed to persist language preferences: {}", err);
     }
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn get_vibe_coding_config(
+    state: State<'_, AppState>,
+) -> Result<VibeCodingConfig, String> {
+    let config = state.config.lock().await;
+    Ok(normalized_vibe_coding_config(&config.vibe_coding))
+}
+
+#[tauri::command]
+pub async fn set_vibe_coding_config(
+    state: State<'_, AppState>,
+    config: VibeCodingConfig,
+) -> Result<VibeCodingConfig, String> {
+    let normalized = normalized_vibe_coding_config(&config);
+
+    let mut app_config = state.config.lock().await;
+    app_config.vibe_coding = normalized.clone();
+    if let Err(err) = app_config.vibe_coding.save_to_disk() {
+        log::warn!("Failed to persist vibe coding config: {}", err);
+    }
+
     Ok(normalized)
 }
 

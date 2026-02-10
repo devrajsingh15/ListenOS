@@ -127,6 +127,9 @@ impl Default for AppState {
         if let Some(saved_languages) = crate::config::LanguagePreferences::load_from_disk() {
             app_config.language_preferences = saved_languages;
         }
+        if let Some(saved_vibe) = crate::config::VibeCodingConfig::load_from_disk() {
+            app_config.vibe_coding = saved_vibe;
+        }
 
         Self {
             audio: Arc::new(Mutex::new(AudioState::default())),
@@ -243,6 +246,8 @@ pub fn run() {
             commands::set_trigger_hotkey,
             commands::get_language_preferences,
             commands::set_language_preferences,
+            commands::get_vibe_coding_config,
+            commands::set_vibe_coding_config,
             // Conversation
             commands::get_conversation,
             commands::clear_conversation,
