@@ -15,6 +15,17 @@ export interface ActionResult {
   payload: Record<string, unknown>;
   refined_text: string | null;
   response_text: string | null;
+  requires_confirmation: boolean;
+  pending_action_id: string | null;
+}
+
+export interface PendingAction {
+  id: string;
+  action_type: string;
+  payload: Record<string, unknown>;
+  transcription: string;
+  summary: string;
+  created_at: string;
 }
 
 export interface VoiceProcessingResult {
@@ -125,6 +136,18 @@ export async function typeText(text: string): Promise<{ success: boolean; messag
 
 export async function runSystemCommand(command: string): Promise<{ success: boolean; message: string; output?: string }> {
   return invoke("run_system_command", { command });
+}
+
+export async function getPendingAction(): Promise<PendingAction | null> {
+  return invoke("get_pending_action");
+}
+
+export async function confirmPendingAction(): Promise<{ success: boolean; message: string; output?: string }> {
+  return invoke("confirm_pending_action");
+}
+
+export async function cancelPendingAction(): Promise<boolean> {
+  return invoke("cancel_pending_action");
 }
 
 // ============ Audio Device Commands ============

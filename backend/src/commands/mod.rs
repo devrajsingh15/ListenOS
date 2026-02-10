@@ -56,6 +56,26 @@ pub struct ActionResultResponse {
     pub payload: serde_json::Value,
     pub refined_text: Option<String>,
     pub response_text: Option<String>,
+    pub requires_confirmation: bool,
+    pub pending_action_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingAction {
+    pub id: String,
+    pub action: ActionResult,
+    pub transcription: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingActionResponse {
+    pub id: String,
+    pub action_type: String,
+    pub payload: serde_json::Value,
+    pub transcription: String,
+    pub summary: String,
+    pub created_at: String,
 }
 
 // ============ Core Voice Commands ============
@@ -181,10 +201,16 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         Err(_) => Vec::new(),
     };
 
-    // Use server API for transcription (key is on server)
+    // Transcription strategy:
+    // 1) Try backend API (recommended for centralized auth/rate policies)
+    // 2) Fallback to direct Groq call if server is unavailable/misconfigured
     let transcription = {
-        let api_client = state.api_client.lock().await;
-        match api_client.transcribe(&wav_data, Some(&dictionary_hints)).await {
+        let server_transcription = {
+            let api_client = state.api_client.lock().await;
+            api_client.transcribe(&wav_data, Some(&dictionary_hints)).await
+        };
+
+        match server_transcription {
             Ok(result) => {
                 log::info!("Server transcription: {}", result.text);
                 TranscriptionResult {
@@ -194,19 +220,42 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                     is_final: result.is_final,
                 }
             }
-            Err(e) => {
-                log::error!("Transcription failed: {}", e);
-                {
-                    let mut error_log = state.error_log.lock().await;
-                    error_log.log_error_with_details(
-                        crate::error_log::ErrorType::Transcription,
-                        "Voice transcription failed",
-                        e.clone()
-                    );
+            Err(server_err) => {
+                log::warn!(
+                    "Server transcription failed, attempting direct Groq fallback: {}",
+                    server_err
+                );
+
+                let groq_client = GroqClient::new();
+                match groq_client.transcribe_with_hints(&wav_data, &dictionary_hints).await {
+                    Ok(result) => {
+                        log::info!("Direct Groq fallback transcription succeeded");
+                        TranscriptionResult {
+                            text: result.text,
+                            duration_ms,
+                            confidence: result.confidence,
+                            is_final: result.is_final,
+                        }
+                    }
+                    Err(groq_err) => {
+                        let combined = format!(
+                            "server error: {}; groq fallback error: {}",
+                            server_err, groq_err
+                        );
+                        log::error!("Transcription failed: {}", combined);
+                        {
+                            let mut error_log = state.error_log.lock().await;
+                            error_log.log_error_with_details(
+                                crate::error_log::ErrorType::Transcription,
+                                "Voice transcription failed",
+                                combined.clone(),
+                            );
+                        }
+                        let mut is_processing = state.is_processing.lock().await;
+                        *is_processing = false;
+                        return Err(format!("Transcription failed: {}", combined));
+                    }
                 }
-                let mut is_processing = state.is_processing.lock().await;
-                *is_processing = false;
-                return Err(format!("Transcription failed: {}", e));
             }
         }
     };
@@ -242,6 +291,8 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 payload: serde_json::json!({}),
                 refined_text: None,
                 response_text: None,
+                requires_confirmation: false,
+                pending_action_id: None,
             },
             executed: true,
             response_text: None,
@@ -334,7 +385,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     };
 
     // Use server API for intent processing
-    let action = {
+    let mut action = {
         let api_client = state.api_client.lock().await;
         
         // Build request for server API
@@ -412,9 +463,55 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     };
 
-    // Execute the action
-    let execute_result = execute_action_internal(&action, &state).await;
-    let executed = execute_result.is_ok();
+    // Deterministic local router fallback.
+    // If server returns dictation for an obvious command phrase, prefer local action routing.
+    if should_use_local_command_fallback(&transcription.text, &context, &action) {
+        if let Some(local_action) = cloud::detect_local_command(&transcription.text) {
+            log::info!(
+                "Local router fallback selected action {:?} for transcript '{}'",
+                local_action.action_type,
+                transcription.text
+            );
+            action = local_action;
+        }
+    }
+
+    let requires_confirmation = action.requires_confirmation || action_requires_confirmation(&action);
+    let mut pending_action_id: Option<String> = None;
+
+    if requires_confirmation {
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let summary = summarize_action(&action);
+
+        {
+            let mut pending = state.pending_action.lock().await;
+            *pending = Some(PendingAction {
+                id: id.clone(),
+                action: action.clone(),
+                transcription: transcription.text.clone(),
+                created_at,
+            });
+        }
+
+        pending_action_id = Some(id);
+        if action.response_text.is_none() {
+            action.response_text = Some(format!("Confirmation required: {}", summary));
+        }
+    }
+
+    // Execute immediately only for non-risky actions.
+    let execute_result = if requires_confirmation {
+        Ok(CommandResult {
+            success: true,
+            message: "Action pending confirmation".to_string(),
+            output: None,
+        })
+    } else {
+        execute_action_internal(&action, &state).await
+    };
+
+    let executed = !requires_confirmation && execute_result.is_ok();
     
     // Log execution errors
     if let Err(ref e) = execute_result {
@@ -427,7 +524,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     }
     
     // Track typed text for correction learning
-    if action.action_type == ActionType::TypeText {
+    if executed && action.action_type == ActionType::TypeText {
         if let Some(ref typed) = action.refined_text {
             let mut tracker = state.correction_tracker.lock().await;
             tracker.record_typed(transcription.text.clone(), typed.clone());
@@ -437,9 +534,14 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     // Update conversation with assistant response
     {
         let mut conversation = state.conversation.lock().await;
-        let response_content = action.response_text.clone()
-            .or_else(|| action.refined_text.clone())
-            .unwrap_or_else(|| format!("Executed: {:?}", action.action_type));
+        let response_content = if requires_confirmation {
+            action.response_text.clone()
+                .unwrap_or_else(|| format!("Pending confirmation: {}", summarize_action(&action)))
+        } else {
+            action.response_text.clone()
+                .or_else(|| action.refined_text.clone())
+                .unwrap_or_else(|| format!("Executed: {:?}", action.action_type))
+        };
         
         conversation.add_assistant_message(
             response_content,
@@ -464,6 +566,8 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
             payload: action.payload,
             refined_text: action.refined_text,
             response_text: action.response_text.clone(),
+            requires_confirmation,
+            pending_action_id: pending_action_id.clone(),
         },
         executed,
         response_text: action.response_text,
@@ -504,6 +608,58 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, St
         audio_device: audio.selected_device.clone(),
         last_transcription: None,
     })
+}
+
+/// Get a pending action waiting for user confirmation.
+#[tauri::command]
+pub async fn get_pending_action(state: State<'_, AppState>) -> Result<Option<PendingActionResponse>, String> {
+    let pending = state.pending_action.lock().await;
+    Ok(pending.as_ref().map(|p| PendingActionResponse {
+        id: p.id.clone(),
+        action_type: format!("{:?}", p.action.action_type),
+        payload: p.action.payload.clone(),
+        transcription: p.transcription.clone(),
+        summary: summarize_action(&p.action),
+        created_at: p.created_at.clone(),
+    }))
+}
+
+/// Confirm and execute the pending action.
+#[tauri::command]
+pub async fn confirm_pending_action(state: State<'_, AppState>) -> Result<CommandResult, String> {
+    let pending = {
+        let pending_guard = state.pending_action.lock().await;
+        pending_guard.clone()
+    };
+
+    let pending = pending.ok_or_else(|| "No pending action to confirm".to_string())?;
+    let execute_result = execute_action_internal(&pending.action, &state).await;
+
+    match execute_result {
+        Ok(result) => {
+            let mut pending_guard = state.pending_action.lock().await;
+            *pending_guard = None;
+            Ok(result)
+        }
+        Err(e) => {
+            let mut error_log = state.error_log.lock().await;
+            error_log.log_error_with_details(
+                crate::error_log::ErrorType::ActionExecution,
+                format!("Failed to execute confirmed {:?}", pending.action.action_type),
+                e.clone(),
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Cancel the pending action without executing it.
+#[tauri::command]
+pub async fn cancel_pending_action(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut pending = state.pending_action.lock().await;
+    let had_pending = pending.is_some();
+    *pending = None;
+    Ok(had_pending)
 }
 
 /// Get real-time audio level (0.0 to 1.0) for visualization
@@ -555,6 +711,142 @@ pub async fn set_audio_device(
     audio.selected_device = Some(device_name.clone());
     log::info!("Set audio device to {}", device_name);
     Ok(true)
+}
+
+fn should_use_local_command_fallback(
+    text: &str,
+    context: &VoiceContext,
+    server_action: &ActionResult,
+) -> bool {
+    if server_action.action_type != ActionType::TypeText {
+        return false;
+    }
+
+    if context.mode == VoiceMode::Command {
+        return true;
+    }
+
+    looks_like_command_phrase(text)
+}
+
+fn looks_like_command_phrase(text: &str) -> bool {
+    let mut t = text.trim().to_lowercase();
+    if t.is_empty() {
+        return false;
+    }
+
+    if let Some(rest) = t.strip_prefix("please ") {
+        t = rest.trim().to_string();
+    }
+
+    let exact_commands = [
+        "mute",
+        "unmute",
+        "copy",
+        "paste",
+        "cut",
+        "undo",
+        "redo",
+        "save",
+        "refresh",
+        "next",
+        "previous",
+        "play",
+        "pause",
+        "maximize",
+        "minimize",
+        "show desktop",
+    ];
+    if exact_commands.contains(&t.as_str()) {
+        return true;
+    }
+
+    let command_prefixes = [
+        "open ",
+        "launch ",
+        "start ",
+        "search ",
+        "search for ",
+        "google ",
+        "look up ",
+        "volume ",
+        "lock ",
+        "take a screenshot",
+        "screenshot",
+        "switch ",
+        "close window",
+        "close tab",
+        "new tab",
+        "new window",
+        "run ",
+    ];
+
+    command_prefixes.iter().any(|prefix| t.starts_with(prefix))
+}
+
+fn action_requires_confirmation(action: &ActionResult) -> bool {
+    match action.action_type {
+        ActionType::RunCommand | ActionType::SendEmail | ActionType::MultiStep | ActionType::CustomCommand => true,
+        ActionType::SystemControl => {
+            let system_action = action.payload.get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            matches!(
+                system_action.as_str(),
+                "shutdown" | "restart" | "sleep" | "recycle_bin" | "factory_reset" | "sign_out"
+            )
+        }
+        _ => false,
+    }
+}
+
+fn summarize_action(action: &ActionResult) -> String {
+    match action.action_type {
+        ActionType::OpenApp => {
+            let app = action.payload.get("app").and_then(|v| v.as_str()).unwrap_or("application");
+            format!("Open {}", app)
+        }
+        ActionType::OpenUrl => {
+            let url = action.payload.get("url").and_then(|v| v.as_str()).unwrap_or("URL");
+            format!("Open {}", url)
+        }
+        ActionType::WebSearch => {
+            let query = action.payload.get("query").and_then(|v| v.as_str()).unwrap_or("query");
+            format!("Search web for \"{}\"", query)
+        }
+        ActionType::SystemControl => {
+            let system_action = action.payload.get("action").and_then(|v| v.as_str()).unwrap_or("system action");
+            format!("System action: {}", system_action)
+        }
+        ActionType::RunCommand => {
+            let cmd = action.payload.get("command").and_then(|v| v.as_str()).unwrap_or("command");
+            format!("Run command: {}", cmd)
+        }
+        ActionType::SendEmail => "Send email".to_string(),
+        ActionType::VolumeControl => {
+            let direction = action.payload.get("direction").and_then(|v| v.as_str()).unwrap_or("change");
+            format!("Volume {}", direction)
+        }
+        ActionType::WindowControl => {
+            let window_action = action.payload.get("action").and_then(|v| v.as_str()).unwrap_or("window action");
+            format!("Window {}", window_action)
+        }
+        ActionType::KeyboardShortcut => {
+            let shortcut = action.payload.get("shortcut").and_then(|v| v.as_str()).unwrap_or("shortcut");
+            format!("Keyboard shortcut: {}", shortcut)
+        }
+        ActionType::TypeText => {
+            let text = action.refined_text.as_deref().unwrap_or("text");
+            if text.chars().count() > 48 {
+                let preview: String = text.chars().take(48).collect();
+                format!("Type text: {}...", preview)
+            } else {
+                format!("Type text: {}", text)
+            }
+        }
+        _ => format!("{:?}", action.action_type),
+    }
 }
 
 // ============ Action Execution ============

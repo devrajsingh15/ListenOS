@@ -6,10 +6,14 @@ import {
   isTauri,
   startListening,
   stopListening,
+  getPendingAction,
+  confirmPendingAction,
+  cancelPendingAction,
   onShortcutPressed,
   onShortcutReleased,
   getAudioLevel,
   VoiceProcessingResult,
+  PendingAction,
 } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 
@@ -51,6 +55,7 @@ export default function AssistantPage() {
   const [showTooltip, setShowTooltip] = useState(false);
   const [notification, setNotification] = useState<NotificationType>(null);
   const [learnedWord, setLearnedWord] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const stateRef = useRef<AssistantState>("idle");
   const audioLevelInterval = useRef<NodeJS.Timeout | null>(null);
   const tooltipTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -83,14 +88,21 @@ export default function AssistantPage() {
 
   // Show tooltip on hover with delay
   useEffect(() => {
-    if (hovered && state === "idle" && !notification) {
+    if (hovered && state === "idle" && !notification && !pendingAction) {
       tooltipTimeout.current = setTimeout(() => setShowTooltip(true), 300);
     } else {
       if (tooltipTimeout.current) clearTimeout(tooltipTimeout.current);
       setShowTooltip(false);
     }
     return () => { if (tooltipTimeout.current) clearTimeout(tooltipTimeout.current); };
-  }, [hovered, state, notification]);
+  }, [hovered, state, notification, pendingAction]);
+
+  useEffect(() => {
+    if (!mounted || !isTauri()) return;
+    getPendingAction()
+      .then((pending) => setPendingAction(pending))
+      .catch(() => undefined);
+  }, [mounted]);
 
   // Poll audio level when listening/handsfree
   useEffect(() => {
@@ -109,12 +121,12 @@ export default function AssistantPage() {
   }, [state]);
 
   const start = useCallback(async (handsfree = false) => {
-    if (stateRef.current !== "idle") return;
+    if (stateRef.current !== "idle" || pendingAction) return;
     try {
       await startListening();
       setState(handsfree ? "handsfree" : "listening");
     } catch (e) { console.warn("Start failed:", e); }
-  }, []);
+  }, [pendingAction]);
 
   const stop = useCallback(async () => {
     if (stateRef.current !== "listening" && stateRef.current !== "handsfree") return;
@@ -124,6 +136,14 @@ export default function AssistantPage() {
       const result = await stopListening();
       if (result.action?.action_type === "NoAction") {
         setState("idle");
+        return;
+      }
+
+      if (result.action?.requires_confirmation) {
+        const pending = await getPendingAction();
+        setPendingAction(pending);
+        setFeedback(pending?.summary || "Awaiting confirmation");
+        setState("success");
         return;
       }
       
@@ -144,6 +164,35 @@ export default function AssistantPage() {
       setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
     }
   }, []);
+
+  const handleConfirmPending = useCallback(async () => {
+    if (!pendingAction) return;
+    setState("processing");
+    try {
+      const result = await confirmPendingAction();
+      setPendingAction(null);
+      setFeedback(result.message || "Action confirmed");
+      setState("success");
+      setTimeout(() => { setState("idle"); setFeedback(null); }, 900);
+    } catch {
+      setState("error");
+      setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
+    }
+  }, [pendingAction]);
+
+  const handleCancelPending = useCallback(async () => {
+    if (!pendingAction) return;
+    try {
+      await cancelPendingAction();
+      setPendingAction(null);
+      setFeedback("Action canceled");
+      setState("success");
+      setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
+    } catch {
+      setState("error");
+      setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
+    }
+  }, [pendingAction]);
 
   const cancel = useCallback(() => {
     setState("idle");
@@ -207,9 +256,41 @@ export default function AssistantPage() {
         )}
       </AnimatePresence>
 
+      {/* Pending confirmation popup */}
+      <AnimatePresence>
+        {pendingAction && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.96 }}
+            className="absolute bottom-full mb-3 px-4 py-3 rounded-2xl keep-bg w-[320px]"
+            style={{ background: "rgba(20,20,20,0.98)", border: "1px solid rgba(255,255,255,0.12)" }}
+          >
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] tracking-wide uppercase text-yellow-300/90">Confirmation required</span>
+              <span className="text-sm text-white/95">{pendingAction.summary}</span>
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  onClick={handleConfirmPending}
+                  className="px-3 py-1.5 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-300 text-xs font-medium transition-colors"
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={handleCancelPending}
+                  className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Tooltip */}
       <AnimatePresence>
-        {showTooltip && !notification && (
+        {showTooltip && !notification && !pendingAction && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}

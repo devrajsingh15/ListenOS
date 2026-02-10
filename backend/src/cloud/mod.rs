@@ -1171,6 +1171,12 @@ impl Default for DeepgramClient {
     }
 }
 
+/// Public helper for deterministic command routing without calling the LLM.
+/// Returns `Some(ActionResult)` only for unambiguous command phrases.
+pub fn detect_local_command(text: &str) -> Option<ActionResult> {
+    GroqClient::new().detect_local_command(text)
+}
+
 /// Encode PCM samples to WAV format for API upload
 pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
     use std::io::Cursor;

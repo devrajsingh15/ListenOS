@@ -82,6 +82,14 @@ pub struct ApiError {
     pub details: Option<String>,
 }
 
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let shortened: String = text.chars().take(max_chars).collect();
+    format!("{}...", shortened)
+}
+
 impl ApiClient {
     /// Create a new API client with default configuration
     pub fn new() -> Self {
@@ -170,9 +178,19 @@ impl ApiClient {
             .map_err(|e| format!("Transcription request failed: {}", e))?;
         
         if !response.status().is_success() {
-            let error: ApiError = response.json().await
-                .unwrap_or(ApiError { error: "Unknown error".to_string(), details: None });
-            return Err(format!("Transcription failed: {}", error.error));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let parsed = serde_json::from_str::<ApiError>(&body).ok();
+            let message = parsed
+                .map(|e| {
+                    if let Some(details) = e.details {
+                        format!("{} ({})", e.error, details)
+                    } else {
+                        e.error
+                    }
+                })
+                .unwrap_or_else(|| truncate_for_log(body.trim(), 220));
+            return Err(format!("Transcription failed [{}]: {}", status, message));
         }
         
         response.json().await
@@ -198,9 +216,19 @@ impl ApiClient {
             .map_err(|e| format!("Process request failed: {}", e))?;
         
         if !response.status().is_success() {
-            let error: ApiError = response.json().await
-                .unwrap_or(ApiError { error: "Unknown error".to_string(), details: None });
-            return Err(format!("Processing failed: {}", error.error));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let parsed = serde_json::from_str::<ApiError>(&body).ok();
+            let message = parsed
+                .map(|e| {
+                    if let Some(details) = e.details {
+                        format!("{} ({})", e.error, details)
+                    } else {
+                        e.error
+                    }
+                })
+                .unwrap_or_else(|| truncate_for_log(body.trim(), 220));
+            return Err(format!("Processing failed [{}]: {}", status, message));
         }
         
         response.json().await

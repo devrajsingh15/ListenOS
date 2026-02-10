@@ -70,6 +70,8 @@ pub struct AppState {
     pub error_log: Arc<Mutex<ErrorLog>>,
     // API client for backend server
     pub api_client: Arc<Mutex<ApiClient>>,
+    // Pending high-risk action awaiting explicit user confirmation
+    pub pending_action: Arc<Mutex<Option<commands::PendingAction>>>,
 }
 
 impl Default for AppState {
@@ -113,6 +115,7 @@ impl Default for AppState {
             correction_tracker: Arc::new(Mutex::new(CorrectionTracker::new())),
             error_log: Arc::new(Mutex::new(ErrorLog::new())),
             api_client: Arc::new(Mutex::new(ApiClient::with_config(api_config))),
+            pending_action: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -197,6 +200,9 @@ pub fn run() {
             // Actions
             commands::type_text,
             commands::run_system_command,
+            commands::get_pending_action,
+            commands::confirm_pending_action,
+            commands::cancel_pending_action,
             // Audio
             commands::get_audio_devices,
             commands::set_audio_device,
