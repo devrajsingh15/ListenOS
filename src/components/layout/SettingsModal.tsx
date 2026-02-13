@@ -13,10 +13,13 @@ import {
   setLanguagePreferences,
   getVibeCodingConfig,
   setVibeCodingConfig,
+  getLocalApiSettings,
+  setLocalApiSettings,
 } from "@/lib/tauri";
 import type { VibeCodingConfig } from "@/lib/tauri";
 import { checkForUpdates } from "@/lib/updater";
 import { useAuth } from "@/context/AuthContext";
+import packageInfo from "../../../package.json";
 import {
   Settings02Icon,
   ComputerIcon,
@@ -66,7 +69,7 @@ const settingsNavItems: SettingsNavItem[] = [
   { id: "privacy", label: "Data and Privacy", icon: ShieldUserIcon, category: "account" },
 ];
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = packageInfo.version;
 
 const SOURCE_LANGUAGE_OPTIONS = [
   { value: "auto", label: "Auto Detect" },
@@ -262,6 +265,10 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const [vibeConfig, setVibeConfigState] = useState<VibeCodingConfig>(DEFAULT_VIBE_CONFIG);
   const [vibeSaving, setVibeSaving] = useState(false);
   const [vibeLoading, setVibeLoading] = useState(false);
+  const [useRemoteApi, setUseRemoteApi] = useState(false);
+  const [groqApiKey, setGroqApiKey] = useState("");
+  const [apiSettingsLoading, setApiSettingsLoading] = useState(false);
+  const [apiSettingsSaving, setApiSettingsSaving] = useState(false);
 
   // Load actual autostart state on mount
   useEffect(() => {
@@ -289,6 +296,18 @@ function SettingsContent({ section }: { section: SettingsSection }) {
           setUpdateStatus("Failed to load vibe coding settings");
         })
         .finally(() => setVibeLoading(false));
+
+      setApiSettingsLoading(true);
+      getLocalApiSettings()
+        .then((localApi) => {
+          setUseRemoteApi(localApi.use_remote_api);
+          setGroqApiKey(localApi.groq_api_key ?? "");
+        })
+        .catch((err) => {
+          console.error("Failed to load local API settings:", err);
+          setUpdateStatus("Failed to load local API settings");
+        })
+        .finally(() => setApiSettingsLoading(false));
     }
   }, []);
 
@@ -350,6 +369,48 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     setShowInTray(checked);
     await updateSettings({ showInTray: checked });
   }, [updateSettings]);
+
+  const handleApiRoutingChange = useCallback(async (checked: boolean) => {
+    setUseRemoteApi(checked);
+    if (!isTauri()) {
+      return;
+    }
+
+    setApiSettingsSaving(true);
+    try {
+      const saved = await setLocalApiSettings(checked, groqApiKey);
+      setUseRemoteApi(saved.use_remote_api);
+      setGroqApiKey(saved.groq_api_key ?? "");
+      setUpdateStatus(saved.use_remote_api
+        ? "Cloud routing enabled"
+        : "Local routing enabled");
+    } catch (err) {
+      console.error("Failed to update API routing:", err);
+      setUseRemoteApi(!checked);
+      setUpdateStatus("Failed to update API routing");
+    } finally {
+      setApiSettingsSaving(false);
+    }
+  }, [groqApiKey]);
+
+  const handleGroqApiKeySave = useCallback(async () => {
+    if (!isTauri()) {
+      return;
+    }
+
+    setApiSettingsSaving(true);
+    try {
+      const saved = await setLocalApiSettings(useRemoteApi, groqApiKey);
+      setUseRemoteApi(saved.use_remote_api);
+      setGroqApiKey(saved.groq_api_key ?? "");
+      setUpdateStatus("Groq API key saved locally");
+    } catch (err) {
+      console.error("Failed to save Groq API key:", err);
+      setUpdateStatus("Failed to save Groq API key");
+    } finally {
+      setApiSettingsSaving(false);
+    }
+  }, [groqApiKey, useRemoteApi]);
 
   const handleSourceLanguageChange = useCallback(async (newLanguage: string) => {
     const previousSource = sourceLanguage;
@@ -599,6 +660,44 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                   checked={showInTray} 
                   onChange={handleShowInTrayChange}
                 />
+              }
+            />
+            <SettingsRow
+              label="Use ListenOS cloud routing"
+              description={
+                useRemoteApi
+                  ? "Voice intent routes through ListenOS server API."
+                  : "Voice intent runs locally via direct Groq API."
+              }
+              action={
+                <ToggleSwitch
+                  checked={useRemoteApi}
+                  onChange={handleApiRoutingChange}
+                  disabled={apiSettingsLoading || apiSettingsSaving}
+                />
+              }
+            />
+            <SettingsRow
+              label="Groq API key"
+              description={groqApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for fully local mode."}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={groqApiKey}
+                    onChange={(e) => setGroqApiKey(e.target.value)}
+                    disabled={apiSettingsLoading || apiSettingsSaving}
+                    placeholder="gsk_..."
+                    className="w-56 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors disabled:opacity-50"
+                  />
+                  <button
+                    onClick={() => void handleGroqApiKeySave()}
+                    disabled={apiSettingsLoading || apiSettingsSaving}
+                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                  >
+                    {apiSettingsSaving ? "Saving..." : "Save"}
+                  </button>
+                </div>
               }
             />
           </div>

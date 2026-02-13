@@ -30,7 +30,17 @@ impl Default for ApiMode {
 
 /// Get the Groq API key from environment
 pub fn get_groq_key() -> String {
-    std::env::var("GROQ_API_KEY").unwrap_or_default()
+    if let Ok(value) = std::env::var("GROQ_API_KEY") {
+        let cleaned = value.trim();
+        if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case("replace_with_groq_api_key") {
+            return cleaned.to_string();
+        }
+    }
+
+    crate::config::LocalApiSettings::load_from_disk()
+        .map(|settings| settings.groq_api_key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .unwrap_or_default()
 }
 
 /// Get the Deepgram API key from environment
@@ -620,18 +630,50 @@ impl GroqClient {
             return None; // Too long to be a simple command
         }
         
-        // System controls
-        if t.contains("shutdown") || t.contains("shut down") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "shutdown"})));
+        let has_negation = t.contains("don't")
+            || t.contains("dont")
+            || t.contains("do not")
+            || t.contains("not ")
+            || t.contains("never")
+            || t.contains("cancel");
+
+        // System controls (strict matching for high-risk power actions)
+        let explicit_shutdown = t == "shutdown"
+            || t == "shut down"
+            || t.starts_with("shutdown ")
+            || t.starts_with("shut down ")
+            || t.starts_with("power off")
+            || t.starts_with("turn off computer")
+            || t.starts_with("turn off pc");
+        if explicit_shutdown && !has_negation {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "shutdown"}),
+            ));
         }
-        if t.contains("restart") || t.contains("reboot") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "restart"})));
+
+        let explicit_restart = t == "restart"
+            || t == "reboot"
+            || t.starts_with("restart ")
+            || t.starts_with("reboot ");
+        if explicit_restart && !has_negation {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "restart"}),
+            ));
         }
         if t.contains("lock") && (t.contains("computer") || t.contains("screen") || t.contains("pc") || t.contains("my") || t == "lock") {
             return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "lock"})));
         }
-        if t.contains("sleep") && (t.contains("computer") || t.contains("pc") || t.contains("my") || t == "sleep") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "sleep"})));
+        let explicit_sleep = t == "sleep"
+            || t.starts_with("sleep ")
+            || t.starts_with("put computer to sleep")
+            || t.starts_with("put pc to sleep");
+        if explicit_sleep && !has_negation {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "sleep"}),
+            ));
         }
         let mentions_downloads = t.contains("download") || t.contains("downloads folder");
         let wants_download_count = mentions_downloads

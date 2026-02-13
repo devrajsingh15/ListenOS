@@ -1,6 +1,6 @@
 [package]
 name = "listenos-backend"
-version = "0.1.0"
+version = "0.1.20"
 description = "ListenOS - AI-Powered Voice Control System"
 authors = ["EvidentSphere"]
 license = "PROPRIETARY"

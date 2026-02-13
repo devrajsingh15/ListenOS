@@ -278,6 +278,55 @@ pub struct ApiKeys {
     pub anthropic: Option<String>,
 }
 
+/// Local runtime API settings persisted on device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalApiSettings {
+    pub use_remote_api: bool,
+    pub groq_api_key: String,
+}
+
+impl LocalApiSettings {
+    fn storage_path() -> Result<PathBuf, String> {
+        let data_dir =
+            dirs_next::data_dir().ok_or_else(|| "Could not find data directory".to_string())?;
+        Ok(data_dir.join("ListenOS").join("local_api_settings.json"))
+    }
+
+    pub fn load_from_disk() -> Option<Self> {
+        let path = Self::storage_path().ok()?;
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str::<Self>(&content).ok()
+    }
+
+    pub fn save_to_disk(&self) -> Result<(), String> {
+        let path = Self::storage_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create API settings directory: {}", e))?;
+        }
+
+        let payload = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize local API settings: {}", e))?;
+        std::fs::write(&path, payload)
+            .map_err(|e| format!("Failed to write local API settings: {}", e))?;
+        Ok(())
+    }
+}
+
+impl Default for LocalApiSettings {
+    fn default() -> Self {
+        Self {
+            use_remote_api: std::env::var("LISTENOS_USE_REMOTE_API")
+                .map(|v| {
+                    let value = v.trim().to_lowercase();
+                    matches!(value.as_str(), "1" | "true" | "yes" | "on")
+                })
+                .unwrap_or(false),
+            groq_api_key: std::env::var("GROQ_API_KEY").unwrap_or_default(),
+        }
+    }
+}
+
 /// UI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UIConfig {

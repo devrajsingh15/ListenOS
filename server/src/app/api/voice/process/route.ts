@@ -17,6 +17,46 @@ interface ProcessRequest {
   dictation_style?: "formal" | "casual" | "very_casual";
 }
 
+interface VoiceActionResponse {
+  action_type: string;
+  payload: Record<string, unknown>;
+  refined_text: string | null;
+  response_text: string | null;
+  requires_confirmation: boolean;
+}
+
+function normalizeInput(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?]$/, "")
+    .replace(/, /g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function isFarewellPhrase(text: string): boolean {
+  const t = normalizeInput(text);
+  const farewell = new Set([
+    "bye",
+    "goodbye",
+    "good bye",
+    "see you",
+    "see ya",
+    "talk to you later",
+    "catch you later",
+    "ok bye",
+    "okay bye",
+    "thanks bye",
+  ]);
+  return farewell.has(t);
+}
+
+function isPowerControlAction(result: Pick<VoiceActionResponse, "action_type" | "payload">): boolean {
+  if (result.action_type !== "SystemControl") return false;
+  const action = String(result.payload?.action ?? "").toLowerCase();
+  return action === "shutdown" || action === "restart" || action === "sleep";
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Check for API key auth (desktop app) first
@@ -61,6 +101,19 @@ export async function POST(request: NextRequest) {
     // Check for local commands first (fast path)
     const localAction = detectLocalCommand(text);
     if (localAction) {
+      if (isFarewellPhrase(text) && isPowerControlAction(localAction as VoiceActionResponse)) {
+        return NextResponse.json({
+          action_type: "NoAction",
+          payload: {
+            blocked_action: "power_control",
+            reason: "farewell_phrase",
+          },
+          refined_text: null,
+          response_text:
+            "Ignoring shutdown/restart because this sounded like a goodbye phrase.",
+          requires_confirmation: false,
+        });
+      }
       return NextResponse.json(localAction);
     }
 
@@ -107,7 +160,21 @@ export async function POST(request: NextRequest) {
 
     try {
       const parsed = JSON.parse(content);
-      return NextResponse.json(parseLLMResponse(parsed, text));
+      const llmAction = parseLLMResponse(parsed, text);
+      if (isFarewellPhrase(text) && isPowerControlAction(llmAction)) {
+        return NextResponse.json({
+          action_type: "NoAction",
+          payload: {
+            blocked_action: "power_control",
+            reason: "farewell_phrase",
+          },
+          refined_text: null,
+          response_text:
+            "Ignoring shutdown/restart because this sounded like a goodbye phrase.",
+          requires_confirmation: false,
+        });
+      }
+      return NextResponse.json(llmAction);
     } catch {
       // Fallback to dictation
       return NextResponse.json({
@@ -129,9 +196,7 @@ export async function POST(request: NextRequest) {
 
 // Detect simple commands locally (no LLM needed)
 function detectLocalCommand(text: string): object | null {
-  const t = text.trim().toLowerCase()
-    .replace(/[.,!?]$/, "")
-    .replace(/, /g, " ");
+  const t = normalizeInput(text);
 
   const wordCount = t.split(/\s+/).length;
   if (wordCount > 6) return null;
@@ -161,7 +226,20 @@ function detectLocalCommand(text: string): object | null {
   if (t.includes("screenshot")) {
     return { action_type: "SystemControl", payload: { action: "screenshot" } };
   }
-  if (t.includes("sleep") && (t.includes("computer") || t === "sleep")) {
+  const hasNegation =
+    t.includes("don't") ||
+    t.includes("dont") ||
+    t.includes("do not") ||
+    t.includes("not ") ||
+    t.includes("never") ||
+    t.includes("cancel");
+  if (
+    !hasNegation &&
+    (t === "sleep" ||
+      t.startsWith("sleep ") ||
+      t.startsWith("put computer to sleep") ||
+      t.startsWith("put pc to sleep"))
+  ) {
     return { action_type: "SystemControl", payload: { action: "sleep" } };
   }
 
@@ -258,7 +336,7 @@ RULES:
 }
 
 // Parse LLM response into standardized format
-function parseLLMResponse(parsed: Record<string, unknown>, originalText: string): object {
+function parseLLMResponse(parsed: Record<string, unknown>, originalText: string): VoiceActionResponse {
   const action = parsed.action as string || "type_text";
 
   const actionMap: Record<string, string> = {

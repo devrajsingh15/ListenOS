@@ -187,6 +187,27 @@ export async function setVibeCodingConfig(
   return invoke("set_vibe_coding_config", { config });
 }
 
+export interface LocalApiSettings {
+  use_remote_api: boolean;
+  groq_api_key: string;
+}
+
+export async function getLocalApiSettings(): Promise<LocalApiSettings> {
+  return invoke("get_local_api_settings");
+}
+
+export async function setLocalApiSettings(
+  useRemoteApi: boolean,
+  groqApiKey: string,
+): Promise<LocalApiSettings> {
+  return invoke("set_local_api_settings", {
+    useRemoteApi,
+    groqApiKey,
+    use_remote_api: useRemoteApi,
+    groq_api_key: groqApiKey,
+  });
+}
+
 // ============ Action Commands ============
 
 export async function typeText(text: string): Promise<{ success: boolean; message: string }> {

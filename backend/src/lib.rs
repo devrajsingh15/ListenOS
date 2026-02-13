@@ -248,6 +248,8 @@ pub fn run() {
             commands::set_language_preferences,
             commands::get_vibe_coding_config,
             commands::set_vibe_coding_config,
+            commands::get_local_api_settings,
+            commands::set_local_api_settings,
             // Conversation
             commands::get_conversation,
             commands::clear_conversation,
@@ -447,18 +449,17 @@ pub fn run() {
             });
             log::info!("Clipboard monitoring with auto-learning started");
 
-            // Enable autostart by default on first launch
+            // Ensure autostart is always enabled so the assistant resumes after reboot/login.
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let manager = app.autolaunch();
-                // Only enable if not already configured (first launch)
-                if let Ok(is_enabled) = manager.is_enabled() {
-                    if !is_enabled {
-                        if let Err(e) = manager.enable() {
-                            log::warn!("Failed to enable autostart: {}", e);
-                        } else {
-                            log::info!("Autostart enabled by default");
-                        }
+                if let Err(e) = manager.enable() {
+                    log::warn!("Failed to enforce autostart: {}", e);
+                } else if let Ok(is_enabled) = manager.is_enabled() {
+                    if is_enabled {
+                        log::info!("Autostart is enabled");
+                    } else {
+                        log::warn!("Autostart enable call returned but state is disabled");
                     }
                 }
             }

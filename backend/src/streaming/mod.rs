@@ -25,7 +25,7 @@ pub struct AudioStreamer {
 
 /// Wrapper to hold the stream (cpal::Stream is not Send on some platforms)
 struct StreamHandle {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
 }
 
 // Safety: We ensure the stream is only accessed from the thread that created it
@@ -43,8 +43,99 @@ impl AudioStreamer {
         }
     }
 
+    fn is_handsfree_device_name(name: &str) -> bool {
+        let n = name.to_lowercase();
+        n.contains("hands-free")
+            || n.contains("hands free")
+            || n.contains("ag audio")
+            || n.contains("hfp")
+            || n.contains("hsp")
+    }
+
+    fn get_device_name(device: &cpal::Device) -> String {
+        device.name().unwrap_or_else(|_| "Unknown".to_string())
+    }
+
+    fn find_input_device_by_name(
+        host: &cpal::Host,
+        preferred_name: &str,
+    ) -> Result<Option<cpal::Device>, String> {
+        let wanted = preferred_name.trim().to_lowercase();
+        if wanted.is_empty() {
+            return Ok(None);
+        }
+
+        let mut match_device = None;
+        let devices = host
+            .input_devices()
+            .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
+        for device in devices {
+            let name = Self::get_device_name(&device).to_lowercase();
+            if name == wanted {
+                match_device = Some(device);
+                break;
+            }
+        }
+
+        Ok(match_device)
+    }
+
+    fn select_input_device(
+        host: &cpal::Host,
+        preferred_device_name: Option<&str>,
+    ) -> Result<cpal::Device, String> {
+        if let Some(preferred) = preferred_device_name {
+            if let Some(device) = Self::find_input_device_by_name(host, preferred)? {
+                log::info!("Using preferred input device: {}", Self::get_device_name(&device));
+                return Ok(device);
+            }
+            log::warn!(
+                "Preferred input device '{}' not found, falling back to automatic selection",
+                preferred
+            );
+        }
+
+        let default_device = host.default_input_device();
+        let default_name = default_device.as_ref().map(Self::get_device_name);
+
+        if let Some(default) = default_device {
+            if let Some(name) = default_name.as_ref() {
+                // On many Bluetooth headsets, opening the Hands-Free input can steal output audio route.
+                // If user didn't explicitly pick a mic, prefer a non-handsfree input when available.
+                if Self::is_handsfree_device_name(name) {
+                    let devices = host
+                        .input_devices()
+                        .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
+                    for device in devices {
+                        let candidate_name = Self::get_device_name(&device);
+                        if !Self::is_handsfree_device_name(&candidate_name) {
+                            log::warn!(
+                                "Default input '{}' looks like Bluetooth hands-free. Using '{}' to avoid output audio hijack.",
+                                name,
+                                candidate_name
+                            );
+                            return Ok(device);
+                        }
+                    }
+                }
+            }
+            return Ok(default);
+        }
+
+        // Last-resort fallback.
+        let mut devices = host
+            .input_devices()
+            .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
+        devices
+            .next()
+            .ok_or_else(|| "No input device available. Please check microphone permissions.".to_string())
+    }
+
     /// Start recording audio directly to internal buffer
-    pub fn start_streaming(&self) -> Result<crossbeam_channel::Receiver<Vec<f32>>, String> {
+    pub fn start_streaming(
+        &self,
+        preferred_device_name: Option<&str>,
+    ) -> Result<crossbeam_channel::Receiver<Vec<f32>>, String> {
         if self.is_recording.load(Ordering::SeqCst) {
             return Err("Already recording".to_string());
         }
@@ -70,11 +161,11 @@ impl AudioStreamer {
         
         log::info!("Audio host: {}", host.id().name());
         
-        let device = match host.default_input_device() {
-            Some(d) => d,
-            None => {
+        let device = match Self::select_input_device(&host, preferred_device_name) {
+            Ok(d) => d,
+            Err(e) => {
                 is_recording.store(false, Ordering::SeqCst);
-                return Err("No input device available. Please check microphone permissions.".to_string());
+                return Err(e);
             }
         };
 
@@ -159,7 +250,7 @@ impl AudioStreamer {
 
         // Store stream handle to keep it alive
         if let Ok(mut handle) = stream_handle.lock() {
-            *handle = Some(StreamHandle { _stream: stream });
+            *handle = Some(StreamHandle { stream });
         }
 
         log::info!("Audio streaming started at {} Hz", sample_rate);
@@ -174,7 +265,9 @@ impl AudioStreamer {
         
         // Drop the stream handle to stop recording
         if let Ok(mut handle) = self.stream_handle.lock() {
-            *handle = None;
+            if let Some(active) = handle.take() {
+                let _ = active.stream.pause();
+            }
         }
         
         log::info!("Audio streaming stopped");

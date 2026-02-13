@@ -10,6 +10,7 @@ use crate::audio::AudioDevice;
 use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
 use crate::config::{
     LanguagePreferences,
+    LocalApiSettings,
     VibeActivationMode,
     VibeCodingConfig,
     VibeDetailLevel,
@@ -206,7 +207,7 @@ async fn transform_multilingual_text(
         });
     }
 
-    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| cloud::get_groq_key());
+    let api_key = cloud::get_groq_key();
     if api_key.trim().is_empty() {
         return Err("Missing GROQ_API_KEY for multilingual transform".to_string());
     }
@@ -508,7 +509,7 @@ async fn enhance_vibe_coding_prompt(
         return Err("Vibe enhancement skipped: empty text".to_string());
     }
 
-    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| cloud::get_groq_key());
+    let api_key = cloud::get_groq_key();
     if api_key.trim().is_empty() {
         return Err("Missing GROQ_API_KEY for vibe prompt enhancement".to_string());
     }
@@ -636,9 +637,14 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
     }
 
     // Start audio streaming
+    let preferred_device = {
+        let audio = state.audio.lock().await;
+        audio.selected_device.clone()
+    };
+
     let receiver = {
         let streamer = state.streamer.lock().await;
-        streamer.start_streaming()?
+        streamer.start_streaming(preferred_device.as_deref())?
     };
 
     *is_listening = true;
@@ -1071,20 +1077,75 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
 
     // Intent routing:
     // 1) Deterministic local router first for explicit command phrases
-    // 2) Server intent processing for ambiguous/longer requests
-    let resolve_server_action = || async {
-        if !use_remote_api() {
-            return ActionResult {
-                action_type: ActionType::TypeText,
-                payload: serde_json::json!({}),
-                refined_text: Some(transcription.text.clone()),
-                response_text: None,
-                requires_confirmation: false,
+    // 2) If cloud routing is enabled, use server intent
+    // 3) If cloud routing is disabled (fully local), use direct Groq intent
+    // 4) If server intent fails, fallback to direct Groq intent before dictation
+    let resolve_intent_action = || async {
+        let map_server_action = |result: crate::api_client::ActionResponse| -> ActionResult {
+            let action_type = match result.action_type.as_str() {
+                "TypeText" => ActionType::TypeText,
+                "RunCommand" => ActionType::RunCommand,
+                "OpenApp" => ActionType::OpenApp,
+                "OpenUrl" => ActionType::OpenUrl,
+                "WebSearch" => ActionType::WebSearch,
+                "VolumeControl" => ActionType::VolumeControl,
+                "SystemControl" => ActionType::SystemControl,
+                "SpotifyControl" => ActionType::SpotifyControl,
+                "KeyboardShortcut" => ActionType::KeyboardShortcut,
+                "WindowControl" => ActionType::WindowControl,
+                "Respond" => ActionType::Respond,
+                "Clarify" => ActionType::Clarify,
+                "NoAction" => ActionType::NoAction,
+                _ => ActionType::TypeText,
             };
+            ActionResult {
+                action_type,
+                payload: result.payload,
+                refined_text: result.refined_text,
+                response_text: result.response_text,
+                requires_confirmation: result.requires_confirmation,
+            }
+        };
+
+        if !use_remote_api() {
+            let groq_client = GroqClient::new();
+            match groq_client
+                .process_intent_with_context(&intent_text, &context, &conv_context)
+                .await
+            {
+                Ok(action) => {
+                    log::info!(
+                        "Direct Groq intent action (cloud routing disabled): {:?}",
+                        action.action_type
+                    );
+                    return action;
+                }
+                Err(local_err) => {
+                    log::warn!(
+                        "Direct Groq intent failed (cloud routing disabled), defaulting to dictation: {}",
+                        local_err
+                    );
+                    {
+                        let mut error_log = state.error_log.lock().await;
+                        error_log.log_error_with_details(
+                            crate::error_log::ErrorType::LLMProcessing,
+                            "AI processing unavailable, using dictation mode",
+                            local_err.clone(),
+                        );
+                    }
+                    return ActionResult {
+                        action_type: ActionType::TypeText,
+                        payload: serde_json::json!({}),
+                        refined_text: Some(transcription.text.clone()),
+                        response_text: None,
+                        requires_confirmation: false,
+                    };
+                }
+            }
         }
 
         let api_client = state.api_client.lock().await;
-        
+
         // Build request for server API
         let process_request = crate::api_client::ProcessRequest {
             text: intent_text.clone(),
@@ -1098,63 +1159,67 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 },
             }),
             conversation_history: Some(conv_context.history.clone()),
-            custom_commands: Some(conv_context.custom_commands.iter()
-                .map(|(trigger, name, id)| crate::api_client::CustomCommand {
-                    trigger: trigger.clone(),
-                    name: name.clone(),
-                    id: id.clone(),
-                })
-                .collect()),
+            custom_commands: Some(
+                conv_context
+                    .custom_commands
+                    .iter()
+                    .map(|(trigger, name, id)| crate::api_client::CustomCommand {
+                        trigger: trigger.clone(),
+                        name: name.clone(),
+                        id: id.clone(),
+                    })
+                    .collect(),
+            ),
             dictation_style: Some(match conv_context.dictation_style {
                 cloud::DictationStyle::Formal => "Formal".to_string(),
                 cloud::DictationStyle::Casual => "Casual".to_string(),
                 cloud::DictationStyle::VeryCasual => "VeryCasual".to_string(),
             }),
         };
-        
+
         match api_client.process_intent(process_request).await {
             Ok(result) => {
                 log::info!("Server action: {}", result.action_type);
-                let action_type = match result.action_type.as_str() {
-                    "TypeText" => ActionType::TypeText,
-                    "RunCommand" => ActionType::RunCommand,
-                    "OpenApp" => ActionType::OpenApp,
-                    "OpenUrl" => ActionType::OpenUrl,
-                    "WebSearch" => ActionType::WebSearch,
-                    "VolumeControl" => ActionType::VolumeControl,
-                    "SystemControl" => ActionType::SystemControl,
-                    "SpotifyControl" => ActionType::SpotifyControl,
-                    "KeyboardShortcut" => ActionType::KeyboardShortcut,
-                    "WindowControl" => ActionType::WindowControl,
-                    "Respond" => ActionType::Respond,
-                    "Clarify" => ActionType::Clarify,
-                    "NoAction" => ActionType::NoAction,
-                    _ => ActionType::TypeText,
-                };
-                ActionResult {
-                    action_type,
-                    payload: result.payload,
-                    refined_text: result.refined_text,
-                    response_text: result.response_text,
-                    requires_confirmation: result.requires_confirmation,
-                }
+                map_server_action(result)
             }
             Err(e) => {
-                log::warn!("Server processing failed, defaulting to dictation: {}", e);
+                log::warn!(
+                    "Server processing failed, attempting direct Groq fallback: {}",
+                    e
+                );
+                let groq_client = GroqClient::new();
+                match groq_client
+                    .process_intent_with_context(&intent_text, &context, &conv_context)
+                    .await
                 {
-                    let mut error_log = state.error_log.lock().await;
-                    error_log.log_error_with_details(
-                        crate::error_log::ErrorType::LLMProcessing,
-                        "AI processing unavailable, using dictation mode",
-                        e.clone()
-                    );
-                }
-                ActionResult {
-                    action_type: ActionType::TypeText,
-                    payload: serde_json::json!({}),
-                    refined_text: Some(transcription.text.clone()),
-                    response_text: None,
-                    requires_confirmation: false,
+                    Ok(action) => {
+                        log::info!(
+                            "Direct Groq intent action (server fallback): {:?}",
+                            action.action_type
+                        );
+                        action
+                    }
+                    Err(local_err) => {
+                        log::warn!(
+                            "Direct Groq intent failed (server fallback), defaulting to dictation: {}",
+                            local_err
+                        );
+                        {
+                            let mut error_log = state.error_log.lock().await;
+                            error_log.log_error_with_details(
+                                crate::error_log::ErrorType::LLMProcessing,
+                                "AI processing unavailable, using dictation mode",
+                                format!("server error: {}; groq fallback error: {}", e, local_err),
+                            );
+                        }
+                        ActionResult {
+                            action_type: ActionType::TypeText,
+                            payload: serde_json::json!({}),
+                            refined_text: Some(transcription.text.clone()),
+                            response_text: None,
+                            requires_confirmation: false,
+                        }
+                    }
                 }
             }
         }
@@ -1178,10 +1243,10 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
                 );
                 local_action
             } else {
-            resolve_server_action().await
+            resolve_intent_action().await
         }
     } else {
-        resolve_server_action().await
+        resolve_intent_action().await
     };
 
     // Deterministic local router fallback.
@@ -1195,6 +1260,27 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
             );
             action = local_action;
         }
+    }
+
+    if is_farewell_phrase(&intent_text) && is_power_system_action(&action) {
+        log::warn!(
+            "Blocked accidental power action {:?} for farewell transcript '{}'",
+            action.payload,
+            intent_text
+        );
+        action = ActionResult {
+            action_type: ActionType::NoAction,
+            payload: serde_json::json!({
+                "blocked_action": "power_control",
+                "reason": "farewell_phrase"
+            }),
+            refined_text: None,
+            response_text: Some(
+                "Ignoring shutdown/restart because this sounded like a goodbye phrase."
+                    .to_string(),
+            ),
+            requires_confirmation: false,
+        };
     }
 
     if multilingual.transformed && action.action_type == ActionType::TypeText {
@@ -1248,8 +1334,13 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
     }
 
     let confirms_enabled = confirmations_enabled();
-    let requires_confirmation = confirms_enabled
-        && (action.requires_confirmation || action_requires_confirmation(&action));
+    let should_confirm_action = action.requires_confirmation || action_requires_confirmation(&action);
+    // Safety override: even when global confirmations are disabled, always gate power actions.
+    let requires_confirmation = if confirms_enabled {
+        should_confirm_action
+    } else {
+        is_power_system_action(&action)
+    };
     let mut pending_action_id: Option<String> = None;
 
     if !confirms_enabled {
@@ -1655,11 +1746,13 @@ fn infer_web_target_from_phrase(target: &str, allow_single_word: bool) -> Option
 }
 
 fn use_remote_api() -> bool {
-    std::env::var("LISTENOS_USE_REMOTE_API")
-        .map(|v| {
-            let value = v.trim().to_lowercase();
-            matches!(value.as_str(), "1" | "true" | "yes" | "on")
-        })
+    if let Ok(value) = std::env::var("LISTENOS_USE_REMOTE_API") {
+        let normalized = value.trim().to_lowercase();
+        return matches!(normalized.as_str(), "1" | "true" | "yes" | "on");
+    }
+
+    LocalApiSettings::load_from_disk()
+        .map(|settings| settings.use_remote_api)
         .unwrap_or(false)
 }
 
@@ -1772,7 +1865,7 @@ fn clean_question_text(text: &str) -> String {
 }
 
 async fn generate_groq_answer(question: &str, conv_context: &ConversationContext) -> Result<String, String> {
-    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| cloud::get_groq_key());
+    let api_key = cloud::get_groq_key();
     if api_key.trim().is_empty() {
         return Err("Missing GROQ_API_KEY".to_string());
     }
@@ -2088,6 +2181,43 @@ fn looks_like_command_phrase(text: &str) -> bool {
     ];
 
     command_prefixes.iter().any(|prefix| t.starts_with(prefix))
+}
+
+fn is_farewell_phrase(text: &str) -> bool {
+    let t = normalize_spoken_command_text(text);
+    if t.is_empty() {
+        return false;
+    }
+
+    let exact = [
+        "bye",
+        "goodbye",
+        "good bye",
+        "see you",
+        "see ya",
+        "talk to you later",
+        "catch you later",
+        "thanks bye",
+        "ok bye",
+        "okay bye",
+    ];
+
+    exact.contains(&t.as_str())
+}
+
+fn is_power_system_action(action: &ActionResult) -> bool {
+    if action.action_type != ActionType::SystemControl {
+        return false;
+    }
+
+    let system_action = action
+        .payload
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    matches!(system_action.as_str(), "shutdown" | "restart" | "sleep")
 }
 
 fn action_requires_confirmation(action: &ActionResult) -> bool {
@@ -3817,6 +3947,33 @@ pub async fn set_vibe_coding_config(
     }
 
     Ok(normalized)
+}
+
+fn sanitize_groq_api_key(raw: &str) -> String {
+    let cleaned = raw.trim().to_string();
+    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("replace_with_groq_api_key") {
+        String::new()
+    } else {
+        cleaned
+    }
+}
+
+#[tauri::command]
+pub async fn get_local_api_settings() -> Result<LocalApiSettings, String> {
+    Ok(LocalApiSettings::load_from_disk().unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn set_local_api_settings(
+    use_remote_api: bool,
+    groq_api_key: String,
+) -> Result<LocalApiSettings, String> {
+    let settings = LocalApiSettings {
+        use_remote_api,
+        groq_api_key: sanitize_groq_api_key(&groq_api_key),
+    };
+    settings.save_to_disk()?;
+    Ok(settings)
 }
 
 // ============ Custom Commands ============

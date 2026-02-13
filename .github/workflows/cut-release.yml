@@ -1,0 +1,50 @@
+name: "Cut Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version to release (example: 0.1.21)"
+        required: true
+        type: string
+
+jobs:
+  cut-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bump version files
+        run: npm run release:prepare -- "${{ inputs.version }}"
+
+      - name: Commit and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No version changes detected."
+            exit 1
+          fi
+
+          git add package.json package-lock.json backend/tauri.conf.json backend/Cargo.toml
+          git commit -m "chore(release): v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin HEAD
+          git push origin "v${VERSION}"

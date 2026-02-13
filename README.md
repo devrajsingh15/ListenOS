@@ -167,6 +167,16 @@ Get your keys:
 - **Groq**: [console.groq.com](https://console.groq.com)
 - **Deepgram**: [console.deepgram.com](https://console.deepgram.com)
 
+### Fully Local Routing (Desktop)
+
+You can run voice processing without the ListenOS cloud API:
+
+1. Open **Settings -> System**
+2. Turn **Use ListenOS cloud routing** off
+3. Paste your Groq key in **Groq API key** and save
+
+When cloud routing is off, transcription + intent processing run through direct Groq API calls from your desktop app.
+
 ## 🔧 Development
 
 ### Project Structure
@@ -192,6 +202,24 @@ ListenOS/
 | `npm run tauri:build:mac:dmg` | Build macOS DMG package |
 | `npm run tauri:build:windows:nsis` | Build Windows NSIS installer |
 | `npm run lint` | Run ESLint |
+
+### Auto-Update Release Pipeline
+
+ListenOS supports in-app updates via Tauri updater (no manual reinstall for users once installed).
+
+1. Add GitHub repository secrets:
+   - `TAURI_SIGNING_PRIVATE_KEY`
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+   Generate once with:
+   `npx tauri signer generate -w ~/.tauri/listenos.key`
+2. Run GitHub Action **Cut Release** with a version (for example `0.1.21`).
+3. The workflow bumps versions, creates tag `v<version>`, and pushes it.
+4. Tag push triggers **Release** workflow, which builds installers and publishes updater metadata (`latest.json`) to GitHub Releases.
+5. Installed apps auto-check and install updates on startup.
+
+Local helpers:
+- `npm run release:prepare -- 0.1.21` updates version files locally.
+- `npm run version:sync` syncs `backend/tauri.conf.json` and `backend/Cargo.toml` to `package.json` version.
 
 ### Debugging
 
