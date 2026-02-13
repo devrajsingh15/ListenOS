@@ -72,9 +72,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhEQjMyQjdGODI4MjBGNEMKUldSTUQ0S0NmeXV6alUxME0yRENQU3F5a1hVWTZGbEx0alpMOW9FVW40TTJFc2FLejBRMVRkTU8K",
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklESkNPVVJGUVRSRlFqZzVNMFJGUkRZS1VsZFVWek53VHpSVWRYRmtTelY0TlZOVUwzUjNaemRzVjNKU2EyUlRaRWRvTVZSTlRrVnFjbmhzUzNSdFMycHpTRUV4U210U01YSUs=",
       "endpoints": [
-        "https://github.com/devrajsingh15/ListenOS/releases/latest/download/latest.json"
+        "https://pub-d6533f84d6a6405ab5f83d5a61d118ac.r2.dev/latest.json"
       ],
       "windows": {
         "installMode": "passive"

@@ -3,21 +3,25 @@ name: "Release"
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
-  publish-tauri:
-    permissions:
-      contents: write
+  build-tauri:
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
         include:
-          - platform: "windows-latest"
-            bundleArgs: "--bundles nsis"
-          - platform: "macos-latest"
-            bundleArgs: "--bundles dmg"
+          - id: windows
+            platform: windows-latest
+            buildScript: tauri:build:windows:nsis
+            bundleDir: backend/target/release/bundle/nsis
+            extension: exe
+          - id: macos
+            platform: macos-latest
+            buildScript: tauri:build:mac:dmg
+            bundleDir: backend/target/release/bundle/dmg
+            extension: dmg
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -38,21 +42,113 @@ jobs:
       - name: Sync app versions
         run: npm run version:sync
 
+      - name: Set updater endpoint for this build
+        shell: pwsh
+        env:
+          CLOUDFLARE_R2_PUBLIC_BASE_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_BASE_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_R2_PUBLIC_BASE_URL)) {
+            throw "Missing secret CLOUDFLARE_R2_PUBLIC_BASE_URL"
+          }
+          $baseUrl = $env:CLOUDFLARE_R2_PUBLIC_BASE_URL.TrimEnd("/")
+          $endpoint = "$baseUrl/latest.json"
+          node scripts/set-updater-endpoint.mjs $endpoint
+
       - name: Build Next.js
         run: npm run build
 
       - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run ${{ matrix.buildScript }}
+
+      - name: Resolve updater target key
+        shell: pwsh
+        run: |
+          $targetKey = (node scripts/get-tauri-target-key.mjs).Trim()
+          if ([string]::IsNullOrWhiteSpace($targetKey)) {
+            throw "Failed to resolve updater target key"
+          }
+          "TAURI_TARGET_KEY=$targetKey" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Collect updater artifact
+        shell: pwsh
+        run: |
+          node scripts/collect-updater-artifact.mjs --bundle-dir "${{ matrix.bundleDir }}" --extension "${{ matrix.extension }}" --target "$env:TAURI_TARGET_KEY" --output-dir "dist/updater"
+
+      - name: Upload updater artifact
+        uses: actions/upload-artifact@v4
         with:
-          args: ${{ matrix.bundleArgs }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "ListenOS ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download the latest version of ListenOS."
-          releaseDraft: false
-          prerelease: false
-          projectPath: ./backend
-          includeUpdaterJson: true
+          name: updater-${{ matrix.id }}
+          path: dist/updater/*
+          if-no-files-found: error
+
+  publish-r2:
+    runs-on: ubuntu-latest
+    needs: build-tauri
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: ${{ secrets.CLOUDFLARE_R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Download updater artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: updater-*
+          path: dist/artifacts
+          merge-multiple: false
+
+      - name: Validate R2 configuration
+        run: |
+          for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET R2_PUBLIC_BASE_URL; do
+            if [ -z "${!key}" ]; then
+              echo "Missing required secret: ${key}"
+              exit 1
+            fi
+          done
+
+      - name: Ensure AWS CLI
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            python3 -m pip install --user awscli
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          aws --version
+
+      - name: Build updater manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE_URL="${R2_PUBLIC_BASE_URL%/}/releases/v${VERSION}"
+
+          mkdir -p dist/publish
+          find dist/artifacts -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.msi" -o -name "*.AppImage" -o -name "*.sig" \) -exec cp {} dist/publish/ \;
+
+          node scripts/build-updater-manifest.mjs \
+            --artifacts-dir dist/artifacts \
+            --version "${VERSION}" \
+            --base-url "${BASE_URL}" \
+            --output "dist/publish/latest.json"
+
+      - name: Upload release files to Cloudflare R2
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          aws s3 cp dist/publish/ "s3://${R2_BUCKET}/releases/v${VERSION}/" --recursive --endpoint-url "${R2_ENDPOINT}" --no-progress
+          aws s3 cp dist/publish/latest.json "s3://${R2_BUCKET}/latest.json" --endpoint-url "${R2_ENDPOINT}" --content-type "application/json" --cache-control "no-store" --no-progress
+
+      - name: Print updater URLs
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Version manifest: ${R2_PUBLIC_BASE_URL%/}/releases/v${VERSION}/latest.json"
+          echo "Live updater URL: ${R2_PUBLIC_BASE_URL%/}/latest.json"

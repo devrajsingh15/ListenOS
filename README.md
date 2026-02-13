@@ -210,12 +210,23 @@ ListenOS supports in-app updates via Tauri updater (no manual reinstall for user
 1. Add GitHub repository secrets:
    - `TAURI_SIGNING_PRIVATE_KEY`
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+   - `CLOUDFLARE_R2_ACCESS_KEY_ID`
+   - `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
+   - `CLOUDFLARE_R2_ENDPOINT` (for example `https://<account-id>.r2.cloudflarestorage.com`)
+   - `CLOUDFLARE_R2_BUCKET`
+   - `CLOUDFLARE_R2_PUBLIC_BASE_URL` (for example `https://updates.listenos.com` or your `*.r2.dev` URL)
    Generate once with:
    `npx tauri signer generate -w ~/.tauri/listenos.key`
-2. Run GitHub Action **Cut Release** with a version (for example `0.1.21`).
-3. The workflow bumps versions, creates tag `v<version>`, and pushes it.
-4. Tag push triggers **Release** workflow, which builds installers and publishes updater metadata (`latest.json`) to GitHub Releases.
-5. Installed apps auto-check and install updates on startup.
+   The release workflow sets Tauri's updater endpoint to `<CLOUDFLARE_R2_PUBLIC_BASE_URL>/latest.json` at build time.
+2. Configure your R2 bucket for public reads (or attach a public custom domain).
+3. Run GitHub Action **Cut Release** with a version (for example `0.1.21`).
+4. The workflow bumps versions, creates tag `v<version>`, and pushes it.
+5. Tag push triggers **Release** workflow, which:
+   - builds signed installers
+   - creates updater `latest.json`
+   - uploads all updater files to Cloudflare R2 under `releases/v<version>/`
+   - updates the live updater URL at `<CLOUDFLARE_R2_PUBLIC_BASE_URL>/latest.json`
+6. Installed apps auto-check and install updates on startup.
 
 Local helpers:
 - `npm run release:prepare -- 0.1.21` updates version files locally.
