@@ -682,7 +682,11 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
 
 /// Stop listening and process audio with Groq AI
 #[tauri::command]
-pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessingResult, String> {
+pub async fn stop_listening(
+    state: State<'_, AppState>,
+    dictation_only: Option<bool>,
+) -> Result<VoiceProcessingResult, String> {
+    let dictation_only = dictation_only.unwrap_or(false);
     // Check if listening
     {
         let is_listening = state.is_listening.lock().await;
@@ -1225,7 +1229,21 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     };
 
-    let mut action = if let Some(local_action) = local_router_action {
+    let mut action = if dictation_only {
+            log::info!(
+                "Handsfree dictation mode active, bypassing intent routing and forcing TypeText"
+            );
+            ActionResult {
+                action_type: ActionType::TypeText,
+                payload: serde_json::json!({
+                    "dictation_only": true,
+                    "source": "assistant_handsfree"
+                }),
+                refined_text: Some(transcription.text.clone()),
+                response_text: None,
+                requires_confirmation: false,
+            }
+        } else if let Some(local_action) = local_router_action {
             log::info!(
                 "Local router selected action {:?} for transcript '{}'",
                 local_action.action_type,
@@ -1251,7 +1269,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
 
     // Deterministic local router fallback.
     // If server returns dictation for an obvious command phrase, prefer local action routing.
-    if should_use_local_command_fallback(&intent_text, &context, &action) {
+    if !dictation_only && should_use_local_command_fallback(&intent_text, &context, &action) {
         if let Some(local_action) = cloud::detect_local_command(&intent_text) {
             log::info!(
                 "Local router fallback selected action {:?} for transcript '{}'",
@@ -1262,7 +1280,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         }
     }
 
-    if is_farewell_phrase(&intent_text) && is_power_system_action(&action) {
+    if !dictation_only && is_farewell_phrase(&intent_text) && is_power_system_action(&action) {
         log::warn!(
             "Blocked accidental power action {:?} for farewell transcript '{}'",
             action.payload,
@@ -1287,7 +1305,7 @@ pub async fn stop_listening(state: State<'_, AppState>) -> Result<VoiceProcessin
         action.refined_text = Some(transcription.text.clone());
     }
 
-    if action.action_type == ActionType::TypeText {
+    if !dictation_only && action.action_type == ActionType::TypeText {
         let candidate_text = action
             .refined_text
             .clone()

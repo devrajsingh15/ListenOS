@@ -208,10 +208,11 @@ export default function AssistantPage() {
 
   const stop = useCallback(async () => {
     if (stateRef.current !== "listening" && stateRef.current !== "handsfree") return;
+    const dictationOnly = stateRef.current === "handsfree";
     setState("processing");
     setFeedback(null);
     try {
-      const result = await stopListening();
+      const result = await stopListening(dictationOnly);
       if (result.action?.action_type === "NoAction") {
         setState("idle");
         return;

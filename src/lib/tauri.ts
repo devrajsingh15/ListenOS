@@ -114,8 +114,11 @@ export async function startListening(): Promise<boolean> {
 }
 
 // Stop listening - processes audio with Groq Whisper, executes action, returns result
-export async function stopListening(): Promise<VoiceProcessingResult> {
-  return invoke("stop_listening");
+export async function stopListening(dictationOnly = false): Promise<VoiceProcessingResult> {
+  return invoke("stop_listening", {
+    dictationOnly,
+    dictation_only: dictationOnly,
+  });
 }
 
 // Get current status
