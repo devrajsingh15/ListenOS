@@ -201,6 +201,7 @@ ListenOS/
 | `npm run tauri:build` | Build production installer |
 | `npm run tauri:build:mac:dmg` | Build macOS DMG package |
 | `npm run tauri:build:windows:nsis` | Build Windows NSIS installer |
+| `npm run tauri:build:linux:appimage` | Build Linux AppImage package |
 | `npm run lint` | Run ESLint |
 
 ### Auto-Update Release Pipeline
@@ -223,6 +224,7 @@ ListenOS supports in-app updates via Tauri updater (no manual reinstall for user
 4. The workflow bumps versions, creates tag `v<version>`, and pushes it.
 5. Tag push triggers **Release** workflow, which:
    - builds signed installers
+   - builds for Windows (NSIS), macOS (DMG), and Linux (AppImage)
    - creates updater `latest.json`
    - uploads all updater files to Cloudflare R2 under `releases/v<version>/`
    - updates the live updater URL at `<CLOUDFLARE_R2_PUBLIC_BASE_URL>/latest.json`

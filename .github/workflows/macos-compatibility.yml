@@ -1,8 +1,8 @@
-name: "Build macOS DMG"
+name: "CI macOS DMG Check"
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
       - main
     paths-ignore:
