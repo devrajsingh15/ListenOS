@@ -2,14 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 
-// API configuration - always use production server for desktop app
-// The desktop app should always connect to the deployed server
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://server-c6vdxgsxi-devrajsingh15s-projects.vercel.app";
-
-// Storage keys
-const STORAGE_KEY_USER = "listenos_user";
-const STORAGE_KEY_TOKEN = "listenos_token";
-const STORAGE_KEY_OFFLINE = "listenos_offline_mode";
+const STORAGE_KEY_SETTINGS = "listenos_local_settings";
 
 interface Subscription {
   id: string;
@@ -33,6 +26,26 @@ interface User {
   profilePicture?: string;
 }
 
+const DEFAULT_USER: User = {
+  id: "local-selfhosted",
+  email: "selfhosted@local",
+  firstName: "Self-hosted",
+  lastName: "User",
+};
+
+const DEFAULT_SETTINGS: UserSettings = {
+  hotkey: "Ctrl+Space",
+  language: "en",
+  startOnLogin: true,
+  showInTray: true,
+};
+
+const DEFAULT_SUBSCRIPTION: Subscription = {
+  id: "selfhosted",
+  plan: "self-hosted",
+  status: "active",
+};
+
 interface AuthContextType {
   user: User | null;
   subscription: Subscription | null;
@@ -50,190 +63,66 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [subscription, setSubscription] = useState<Subscription | null>(null);
-  const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [user] = useState<User | null>(DEFAULT_USER);
+  const [subscription] = useState<Subscription | null>(DEFAULT_SUBSCRIPTION);
+  const [settings, setSettings] = useState<UserSettings | null>(DEFAULT_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
-  const [isOfflineMode, setIsOfflineMode] = useState(false);
+  const [isOfflineMode] = useState(true);
 
-  // Load stored auth data on mount
   useEffect(() => {
-    const loadStoredAuth = () => {
+    const loadStoredSettings = () => {
       try {
-        // Check for offline mode
-        const offlineMode = localStorage.getItem(STORAGE_KEY_OFFLINE);
-        if (offlineMode === "true") {
-          setIsOfflineMode(true);
+        const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
+        if (!saved) {
+          return;
         }
-
-        const storedUser = localStorage.getItem(STORAGE_KEY_USER);
-        const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN);
-        
-        if (storedUser) {
-          setUser(JSON.parse(storedUser));
-        }
-        if (storedToken) {
-          setToken(storedToken);
-        }
+        const parsed = JSON.parse(saved) as Partial<UserSettings>;
+        setSettings((prev) => ({
+          ...(prev ?? DEFAULT_SETTINGS),
+          ...parsed,
+        }));
       } catch (error) {
-        console.error("Failed to load stored auth:", error);
+        console.error("Failed to load local settings:", error);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadStoredAuth();
+    loadStoredSettings();
   }, []);
 
-  const handleAuthCallback = useCallback((newToken: string, userData: User) => {
-    setToken(newToken);
-    setUser(userData);
-    setIsOfflineMode(false);
-    localStorage.setItem(STORAGE_KEY_TOKEN, newToken);
-    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userData));
-    localStorage.removeItem(STORAGE_KEY_OFFLINE);
+  const handleAuthCallback = useCallback((_newToken: string, _userData: User) => {
+    // Login is intentionally disabled in self-hosted mode.
   }, []);
-
-  // Listen for deep link auth callback
-  useEffect(() => {
-    const handleDeepLink = async () => {
-      try {
-        // Listen for deep-link events from Tauri (single instance callback)
-        const { listen } = await import("@tauri-apps/api/event");
-        
-        const unlisten = await listen<string>("deep-link", (event) => {
-          const url = event.payload;
-          console.log("Deep link received:", url);
-          
-          if (url.includes("auth/callback")) {
-            try {
-              const urlObj = new URL(url);
-              const callbackToken = urlObj.searchParams.get("token");
-              const userData = urlObj.searchParams.get("user");
-              
-              if (callbackToken && userData) {
-                const parsedUser = JSON.parse(decodeURIComponent(userData));
-                handleAuthCallback(callbackToken, parsedUser);
-              }
-            } catch (e) {
-              console.error("Failed to parse auth callback:", e);
-            }
-          }
-        });
-
-        // Also try to get initial deep link URL on startup
-        const { onOpenUrl } = await import("@tauri-apps/plugin-deep-link");
-        
-        onOpenUrl((urls) => {
-          for (const url of urls) {
-            console.log("Deep link URL opened:", url);
-            if (url.includes("auth/callback")) {
-              try {
-                const urlObj = new URL(url);
-                const callbackToken = urlObj.searchParams.get("token");
-                const userData = urlObj.searchParams.get("user");
-                
-                if (callbackToken && userData) {
-                  const parsedUser = JSON.parse(decodeURIComponent(userData));
-                  handleAuthCallback(callbackToken, parsedUser);
-                }
-              } catch (e) {
-                console.error("Failed to parse auth callback:", e);
-              }
-            }
-          }
-        });
-
-        return () => {
-          unlisten();
-        };
-      } catch (error) {
-        // Not in Tauri environment
-        console.log("Deep link not available:", error);
-      }
-    };
-
-    handleDeepLink();
-  }, [handleAuthCallback]);
 
   const refreshUser = useCallback(async () => {
-    if (!token || isOfflineMode) return;
-
-    try {
-      const response = await fetch(`${API_URL}/api/auth/session`, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.user) {
-          setUser(data.user);
-          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(data.user));
-        }
-        if (data.subscription) setSubscription(data.subscription);
-        if (data.settings) setSettings(data.settings);
-      }
-    } catch (error) {
-      console.error("Failed to refresh user data:", error);
-    }
-  }, [token, isOfflineMode]);
+    // No-op in self-hosted mode.
+  }, []);
 
   const signIn = useCallback(() => {
-    // Open the auth URL in the default browser
-    const authUrl = `${API_URL}/sign-in?redirect_url=listenos://auth/callback`;
-    
-    if (typeof window !== "undefined") {
-      // Use Tauri shell to open URL if available
-      import("@tauri-apps/plugin-shell").then(({ open }) => {
-        open(authUrl);
-      }).catch(() => {
-        window.open(authUrl, "_blank");
-      });
-    }
+    // No-op in self-hosted mode.
   }, []);
 
   const signOut = useCallback(() => {
-    setUser(null);
-    setToken(null);
-    setSubscription(null);
-    setSettings(null);
-    setIsOfflineMode(false);
-    localStorage.removeItem(STORAGE_KEY_USER);
-    localStorage.removeItem(STORAGE_KEY_TOKEN);
-    localStorage.removeItem(STORAGE_KEY_OFFLINE);
+    // No-op in self-hosted mode.
   }, []);
 
   const updateSettings = useCallback(async (newSettings: Partial<UserSettings>) => {
-    if (isOfflineMode) {
-      // In offline mode, just update local state
-      setSettings(prev => prev ? { ...prev, ...newSettings } : null);
-      return;
-    }
+    setSettings((prev) => {
+      const merged = {
+        ...(prev ?? DEFAULT_SETTINGS),
+        ...newSettings,
+      };
 
-    if (!token) return;
-
-    try {
-      const response = await fetch(`${API_URL}/api/settings`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(newSettings),
-      });
-
-      if (response.ok) {
-        setSettings(prev => prev ? { ...prev, ...newSettings } : null);
+      try {
+        localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(merged));
+      } catch (error) {
+        console.error("Failed to persist local settings:", error);
       }
-    } catch (error) {
-      console.error("Failed to update settings:", error);
-    }
-  }, [token, isOfflineMode]);
+
+      return merged;
+    });
+  }, []);
 
   return (
     <AuthContext.Provider
@@ -242,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         subscription,
         settings,
         isLoading,
-        isAuthenticated: !!user,
+        isAuthenticated: true,
         isOfflineMode,
         signIn,
         signOut,
@@ -264,7 +153,6 @@ export function useAuth() {
   return context;
 }
 
-// Helper components for conditional rendering
 export function SignedIn({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   if (isLoading || !isAuthenticated) return null;

@@ -32,7 +32,6 @@ import {
   Cancel01Icon,
   Download04Icon,
   Loading03Icon,
-  CheckmarkCircle02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -94,7 +93,7 @@ const VIBE_ACTIVATION_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: "SmartAuto", label: "Smart auto", description: "Auto-enhance in coding apps and for coding-like prompts." },
+  { value: "SmartAuto", label: "Dynamic smart", description: "Auto-enhance only when coding intent is strong." },
   { value: "ManualOnly", label: "Manual trigger", description: "Enhance only when you start with the trigger phrase." },
   { value: "Always", label: "Always on", description: "Enhance every typed dictation prompt." },
 ];
@@ -254,7 +253,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
   const [currentShortcut, setCurrentShortcut] = useState("Ctrl+Space");
-  const { user, subscription, settings, signIn, signOut, updateSettings, isAuthenticated } = useAuth();
+  const { user, settings, updateSettings } = useAuth();
 
   // Local state for system settings
   const [startOnLogin, setStartOnLogin] = useState(settings?.startOnLogin ?? false);
@@ -862,131 +861,40 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Account</h2>
-          {isAuthenticated && user ? (
-            <div className="space-y-6">
-              <SettingsRow
-                label="Email"
-                description={user.email}
-                action={<span className="text-sm text-muted">Managed by Clerk</span>}
-              />
-              {user.firstName && (
-                <SettingsRow
-                  label="Name"
-                  description={`${user.firstName}${user.lastName ? ` ${user.lastName}` : ""}`}
-                  action={<span className="text-sm text-muted">Managed by Clerk</span>}
-                />
-              )}
-              <SettingsRow
-                label="Sign out"
-                description="Sign out of your account"
-                action={
-                  <button 
-                    onClick={signOut}
-                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100"
-                  >
-                    Sign out
-                  </button>
-                }
-              />
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-muted">Sign in to sync your settings and unlock premium features.</p>
-              <button
-                onClick={signIn}
-                className="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
-              >
-                Sign in
-              </button>
-            </div>
-          )}
+          <div className="space-y-6">
+            <SettingsRow
+              label="Mode"
+              description="Self-hosted local mode. Login is disabled."
+              action={<span className="text-sm text-green-600">Local only</span>}
+            />
+            <SettingsRow
+              label="Profile"
+              description={user?.email || "selfhosted@local"}
+              action={<span className="text-sm text-muted">Stored on this device</span>}
+            />
+          </div>
         </div>
       );
     case "team":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Team</h2>
-          {isAuthenticated ? (
-            <div className="rounded-lg border border-border bg-sidebar-bg p-4">
-              <p className="text-sm text-muted">Team features are available on the Team plan. Upgrade to invite team members.</p>
-            </div>
-          ) : (
-            <p className="text-muted">Sign in to manage your team.</p>
-          )}
+          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
+            <p className="text-sm text-muted">Team sync is disabled in self-hosted mode.</p>
+          </div>
         </div>
       );
     case "billing":
       return (
         <div className="animate-fade-in">
           <h2 className="mb-6 text-2xl font-semibold text-foreground">Plans and Billing</h2>
-          {isAuthenticated ? (
-            <div className="space-y-6">
-              {/* Current Plan */}
-              <div className="rounded-lg border border-border p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-lg font-semibold text-foreground">
-                    {subscription?.plan === "pro" ? "Pro Plan" : subscription?.plan === "team" ? "Team Plan" : "Free Plan"}
-                  </h3>
-                  <span className={cn(
-                    "rounded-full px-3 py-1 text-xs font-medium",
-                    subscription?.status === "active" 
-                      ? "bg-green-100 text-green-700" 
-                      : "bg-yellow-100 text-yellow-700"
-                  )}>
-                    {subscription?.status || "Active"}
-                  </span>
-                </div>
-                <p className="text-sm text-muted">
-                  {subscription?.plan === "free" 
-                    ? "50 voice commands per day with basic features"
-                    : subscription?.plan === "pro"
-                    ? "Unlimited voice commands with advanced AI features"
-                    : "Team collaboration with shared custom commands"
-                  }
-                </p>
-              </div>
-
-              {/* Available Plans */}
-              <div className="grid gap-4">
-                <PlanCard
-                  name="Free"
-                  price={0}
-                  features={[
-                    "50 voice commands/day",
-                    "Basic transcription",
-                    "Standard actions",
-                  ]}
-                  isCurrent={subscription?.plan === "free"}
-                />
-                <PlanCard
-                  name="Pro"
-                  price={9.99}
-                  features={[
-                    "Unlimited voice commands",
-                    "Advanced AI responses",
-                    "Priority processing",
-                    "Custom commands",
-                    "Email support",
-                  ]}
-                  isCurrent={subscription?.plan === "pro"}
-                />
-                <PlanCard
-                  name="Team"
-                  price={29.99}
-                  features={[
-                    "Everything in Pro",
-                    "Team management",
-                    "Shared custom commands",
-                    "Analytics dashboard",
-                    "Priority support",
-                  ]}
-                  isCurrent={subscription?.plan === "team"}
-                />
-              </div>
-            </div>
-          ) : (
-            <p className="text-muted">Sign in to manage your subscription.</p>
-          )}
+          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
+            <p className="text-sm text-muted">
+              ListenOS self-hosted mode has no account billing. Use your own API keys in
+              <span className="font-medium text-foreground"> System </span>
+              settings.
+            </p>
+          </div>
         </div>
       );
     case "privacy":
@@ -1009,11 +917,11 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               }
             />
             <SettingsRow
-              label="Delete account"
-              description="Permanently delete your account and all data"
+              label="Delete local data"
+              description="Clear local ListenOS data on this device"
               action={
                 <button className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100">
-                  Delete account
+                  Clear local data
                 </button>
               }
             />
@@ -1074,48 +982,3 @@ function ToggleSwitch({
   );
 }
 
-function PlanCard({
-  name,
-  price,
-  features,
-  isCurrent,
-}: {
-  name: string;
-  price: number;
-  features: string[];
-  isCurrent: boolean;
-}) {
-  return (
-    <div className={cn(
-      "rounded-lg border p-4",
-      isCurrent ? "border-primary bg-primary/5" : "border-border"
-    )}>
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-semibold text-foreground">{name}</h3>
-          <p className="text-lg font-bold text-foreground">
-            {price === 0 ? "Free" : `$${price}/mo`}
-          </p>
-        </div>
-        {isCurrent ? (
-          <span className="flex items-center gap-1 text-sm text-primary">
-            <HugeiconsIcon icon={CheckmarkCircle02Icon} size={16} />
-            Current
-          </span>
-        ) : (
-          <button className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover">
-            Upgrade
-          </button>
-        )}
-      </div>
-      <ul className="space-y-1">
-        {features.map((feature, i) => (
-          <li key={i} className="flex items-center gap-2 text-sm text-muted">
-            <HugeiconsIcon icon={CheckmarkCircle02Icon} size={14} className="text-green-500" />
-            {feature}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}

@@ -115,11 +115,14 @@ impl Default for AppState {
         // Initialize API client with config from environment
         let api_base_url = std::env::var("LISTENOS_API_URL")
             .unwrap_or_else(|_| "https://server-bay-omega-45.vercel.app".to_string());
+        let api_key = std::env::var("LISTENOS_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         
         let api_config = ApiConfig {
             base_url: api_base_url,
-            api_key: Some(std::env::var("LISTENOS_API_KEY")
-                .unwrap_or_else(|_| "listenos-desktop-app".to_string())),
+            api_key,
             session_token: None,
         };
 

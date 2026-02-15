@@ -16,7 +16,6 @@ use crate::config::{
     VibeDetailLevel,
     VibeTargetTool,
 };
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -399,45 +398,109 @@ fn is_coding_surface_app(app_name: &str) -> bool {
     coding_apps.iter().any(|keyword| app.contains(keyword))
 }
 
-fn looks_like_coding_prompt_request(text: &str) -> bool {
+fn starts_with_any(text: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|prefix| {
+        text == *prefix || text.starts_with(&format!("{} ", prefix))
+    })
+}
+
+fn coding_prompt_signal_score(text: &str) -> u8 {
     let normalized = normalize_spoken_command_text(text);
     if normalized.is_empty() {
-        return false;
+        return 0;
     }
 
-    let coding_keywords = [
-        "bug",
-        "fix",
-        "refactor",
+    // Avoid rewriting normal conversation and generic dictation.
+    if starts_with_any(
+        &normalized,
+        &[
+            "hello",
+            "hi",
+            "hey",
+            "thanks",
+            "thank you",
+            "good morning",
+            "good night",
+            "how are you",
+            "what time",
+            "what day",
+        ],
+    ) {
+        return 0;
+    }
+
+    let mut score = 0_u8;
+    let word_count = normalized.split_whitespace().count();
+
+    if word_count >= 6 {
+        score += 1;
+    }
+
+    if starts_with_any(
+        &normalized,
+        &[
+            "fix",
+            "build",
+            "write",
+            "implement",
+            "create",
+            "generate",
+            "refactor",
+            "debug",
+            "optimize",
+            "add",
+            "update",
+            "improve",
+            "ship",
+        ],
+    ) {
+        score += 2;
+    }
+
+    if [
         "function",
         "method",
         "class",
         "component",
-        "api",
+        "hook",
         "endpoint",
+        "api",
+        "schema",
+        "migration",
         "typescript",
         "javascript",
         "rust",
         "python",
         "react",
+        "next",
         "tauri",
-        "compile",
-        "build",
         "test",
         "unit test",
         "integration test",
+        "stack trace",
+        "exception",
+        "compile",
+        "build error",
+        "lint",
+        "bug",
         "codebase",
         "repository",
-        "git",
-        "stack trace",
-        "error",
-        "exception",
-        "optimize",
-    ];
+        "pull request",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+    {
+        score += 1;
+    }
 
-    coding_keywords
+    if [" with ", " using ", " for ", " so that ", " and "]
         .iter()
-        .any(|keyword| normalized.contains(keyword))
+        .any(|token| normalized.contains(token))
+    {
+        score += 1;
+    }
+
+    score
 }
 
 fn should_apply_vibe_enhancement(
@@ -478,7 +541,8 @@ fn should_apply_vibe_enhancement(
         .as_ref()
         .map(|app| is_coding_surface_app(app))
         .unwrap_or(false);
-    let coding_prompt = looks_like_coding_prompt_request(&source_text);
+    let coding_signal = coding_prompt_signal_score(&source_text);
+    let coding_prompt = coding_signal >= 2;
 
     let decision = match vibe_config.activation_mode {
         VibeActivationMode::ManualOnly => trigger_detected.then_some("manual_trigger"),
@@ -486,10 +550,10 @@ fn should_apply_vibe_enhancement(
         VibeActivationMode::SmartAuto => {
             if trigger_detected {
                 Some("manual_trigger")
-            } else if coding_app_active {
-                Some("coding_app_active")
+            } else if coding_app_active && coding_signal >= 1 {
+                Some("coding_app_dynamic")
             } else if coding_prompt {
-                Some("coding_prompt_detected")
+                Some("coding_prompt_dynamic")
             } else {
                 None
             }
@@ -526,6 +590,15 @@ async fn enhance_vibe_coding_prompt(
         }
     };
 
+    let word_count = base.split_whitespace().count();
+    let dynamic_shape_instruction = if word_count <= 10 {
+        "Input is short: produce a compact prompt with a single clear objective and only essential constraints."
+    } else if word_count <= 28 {
+        "Input has moderate detail: produce a structured prompt with clear scope and practical implementation notes."
+    } else {
+        "Input is detailed: preserve key requirements, organize into clear sections, and avoid dropping constraints."
+    };
+
     let mut sections: Vec<&str> = vec!["Task"];
     if vibe_config.include_constraints {
         sections.push("Constraints");
@@ -542,7 +615,7 @@ async fn enhance_vibe_coding_prompt(
     let concise_preference = if vibe_config.concise_output {
         "Prioritize short wording and avoid unnecessary filler."
     } else {
-        "Be explicit when needed, but keep the prompt practical."
+        "Be explicit when needed, but keep the prompt practical and direct."
     };
     let section_line = format!("Use these sections when relevant: {}.", sections.join(", "));
 
@@ -559,18 +632,19 @@ async fn enhance_vibe_coding_prompt(
             "messages": [
                 {
                     "role": "system",
-                    "content": "You rewrite rough spoken coding ideas into high-quality prompts for AI coding assistants. Preserve user intent and never invent missing requirements. Return STRICT JSON: {\"enhanced_prompt\":\"...\"}. No markdown fences. No extra keys."
+                    "content": "You rewrite rough spoken coding ideas into high-quality prompts for AI coding assistants. Preserve user intent, avoid hype, and never invent missing requirements. Keep output actionable, concrete, and scoped. Return STRICT JSON: {\"enhanced_prompt\":\"...\"}. No markdown fences. No extra keys."
                 },
                 {
                     "role": "user",
                     "content": format!(
-                        "target_tool: {}\ntarget_language: {}\ndetail_level: {:?}\n{}\n{}\n{}\nspoken_text: {}",
+                        "target_tool: {}\ntarget_language: {}\ndetail_level: {:?}\n{}\n{}\n{}\n{}\nspoken_text: {}",
                         target_tool,
                         target_language,
                         vibe_config.detail_level,
                         detail_instruction,
                         concise_preference,
                         section_line,
+                        dynamic_shape_instruction,
                         base
                     )
                 }
@@ -628,6 +702,12 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
     if *is_listening {
         // Already listening - just return true instead of error
         return Ok(true);
+    }
+
+    // Ensure no stale input stream remains open from a prior interrupted session.
+    {
+        let streamer = state.streamer.lock().await;
+        streamer.stop_streaming();
     }
 
     // Clear accumulator
@@ -1442,30 +1522,6 @@ pub async fn stop_listening(
         }
     }
 
-    if !requires_confirmation && should_voice_confirm(&action) {
-        let has_tts_payload = action.payload.get("tts_base64").is_some()
-            || action.payload.get("tts_error").is_some();
-        if !has_tts_payload {
-            let confirmation_text = action
-                .response_text
-                .clone()
-                .or_else(|| execute_result.as_ref().ok().map(|r| r.message.clone()))
-                .unwrap_or_else(|| summarize_action(&action));
-
-            if action.response_text.is_none() {
-                action.response_text = Some(confirmation_text.clone());
-            }
-
-            match synthesize_elevenlabs_tts_base64(&confirmation_text).await {
-                Ok(audio) => attach_tts_payload(&mut action, Some(audio), None),
-                Err(err) => {
-                    log::warn!("ElevenLabs TTS unavailable for action {:?}: {}", action.action_type, err);
-                    attach_tts_payload(&mut action, None, Some(err));
-                }
-            }
-        }
-    }
-
     let executed = !requires_confirmation
         && execute_result
             .as_ref()
@@ -1641,15 +1697,35 @@ pub async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
     crate::audio::AudioState::get_devices()
 }
 
+fn is_handsfree_input_name(name: &str) -> bool {
+    let normalized = name.to_lowercase();
+    normalized.contains("hands-free")
+        || normalized.contains("hands free")
+        || normalized.contains("ag audio")
+        || normalized.contains("hfp")
+        || normalized.contains("hsp")
+}
+
 /// Set the audio input device
 #[tauri::command]
 pub async fn set_audio_device(
     state: State<'_, AppState>,
     device_name: String,
 ) -> Result<bool, String> {
+    let cleaned_name = device_name.trim();
+    if cleaned_name.is_empty() {
+        return Err("Audio device name cannot be empty".to_string());
+    }
+    if is_handsfree_input_name(cleaned_name) {
+        return Err(
+            "Bluetooth hands-free microphones are blocked because they can hijack headphone output audio."
+                .to_string(),
+        );
+    }
+
     let mut audio = state.audio.lock().await;
-    audio.selected_device = Some(device_name.clone());
-    log::info!("Set audio device to {}", device_name);
+    audio.selected_device = Some(cleaned_name.to_string());
+    log::info!("Set audio device to {}", cleaned_name);
     Ok(true)
 }
 
@@ -1944,81 +2020,6 @@ async fn generate_groq_answer(question: &str, conv_context: &ConversationContext
     Ok(answer)
 }
 
-async fn synthesize_elevenlabs_tts_base64(text: &str) -> Result<String, String> {
-    let api_key = std::env::var("ELEVENLABS_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if api_key.is_empty() {
-        return Err("Missing ELEVENLABS_API_KEY".to_string());
-    }
-    if api_key.eq_ignore_ascii_case("replace_with_elevenlabs_api_key") {
-        return Err("ELEVENLABS_API_KEY is still a placeholder value".to_string());
-    }
-
-    let voice_id = std::env::var("ELEVENLABS_VOICE_ID")
-        .unwrap_or_else(|_| "EXAVITQu4vr4xnSDxMaL".to_string());
-    let model_id = std::env::var("ELEVENLABS_MODEL_ID")
-        .unwrap_or_else(|_| "eleven_flash_v2_5".to_string());
-
-    let url = format!(
-        "https://api.elevenlabs.io/v1/text-to-speech/{}/stream?output_format=mp3_44100_128",
-        voice_id
-    );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&url)
-        .header("xi-api-key", api_key)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "text": text,
-            "model_id": model_id
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("ElevenLabs request failed: {}", e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let err_text = response.text().await.unwrap_or_default();
-        return Err(format!("ElevenLabs error [{}]: {}", status, err_text));
-    }
-
-    let bytes = response.bytes().await
-        .map_err(|e| format!("Failed to read ElevenLabs audio stream: {}", e))?;
-
-    if bytes.is_empty() {
-        return Err("ElevenLabs returned empty audio".to_string());
-    }
-
-    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
-}
-
-fn attach_tts_payload(action: &mut ActionResult, tts_base64: Option<String>, tts_error: Option<String>) {
-    let mut payload = match action.payload.as_object() {
-        Some(obj) => obj.clone(),
-        None => serde_json::Map::new(),
-    };
-
-    if let Some(audio) = tts_base64 {
-        payload.insert("tts_base64".to_string(), serde_json::Value::String(audio));
-        payload.insert(
-            "audio_mime".to_string(),
-            serde_json::Value::String("audio/mpeg".to_string()),
-        );
-        payload.insert(
-            "tts_provider".to_string(),
-            serde_json::Value::String("elevenlabs".to_string()),
-        );
-        payload.remove("tts_error");
-    } else if let Some(err) = tts_error {
-        payload.insert("tts_error".to_string(), serde_json::Value::String(err));
-    }
-
-    action.payload = serde_json::Value::Object(payload);
-}
-
 fn upsert_action_payload_field(action: &mut ActionResult, key: &str, value: serde_json::Value) {
     if let Some(obj) = action.payload.as_object_mut() {
         obj.insert(key.to_string(), value);
@@ -2027,26 +2028,6 @@ fn upsert_action_payload_field(action: &mut ActionResult, key: &str, value: serd
         payload.insert(key.to_string(), value);
         action.payload = serde_json::Value::Object(payload);
     }
-}
-
-fn should_voice_confirm(action: &ActionResult) -> bool {
-    matches!(
-        action.action_type,
-        ActionType::Respond
-            | ActionType::Clarify
-            | ActionType::OpenApp
-            | ActionType::OpenUrl
-            | ActionType::WebSearch
-            | ActionType::RunCommand
-            | ActionType::VolumeControl
-            | ActionType::SystemControl
-            | ActionType::SpotifyControl
-            | ActionType::DiscordControl
-            | ActionType::KeyboardShortcut
-            | ActionType::WindowControl
-            | ActionType::CustomCommand
-            | ActionType::MultiStep
-    )
 }
 
 async fn build_question_response_action(
@@ -2059,7 +2040,7 @@ async fn build_question_response_action(
     }
 
     let answer = generate_groq_answer(&question, conv_context).await?;
-    let mut action = ActionResult {
+    let action = ActionResult {
         action_type: ActionType::Respond,
         payload: serde_json::json!({
             "source": "ask_mode"
@@ -2068,18 +2049,6 @@ async fn build_question_response_action(
         response_text: Some(answer),
         requires_confirmation: false,
     };
-
-    match synthesize_elevenlabs_tts_base64(
-        action.response_text.as_deref().unwrap_or_default(),
-    )
-    .await
-    {
-        Ok(audio) => attach_tts_payload(&mut action, Some(audio), None),
-        Err(err) => {
-            log::warn!("ElevenLabs TTS unavailable for ask-mode response: {}", err);
-            attach_tts_payload(&mut action, None, Some(err));
-        }
-    }
 
     Ok(action)
 }

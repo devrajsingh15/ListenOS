@@ -9,10 +9,12 @@ ListenOS is a native desktop application that lets you control your computer usi
 ## ✨ Features
 
 - **🗣️ Voice-to-Action**: Speak naturally and ListenOS understands your intent
-- **⚡ Ultra-Fast**: Sub-200ms response time using Groq's Whisper API
+- **🧩 Self-Hosted First**: No login or cloud account required in the desktop app
+- **⚡ Low-Latency Capture**: Push-to-talk flow tuned for quick press/release
 - **🎯 Smart Commands**: Open apps, search the web, compose emails, control volume
 - **✍️ Dictation Mode**: Seamlessly type spoken text into any application
-- **🔒 Privacy-First**: All processing happens via secure cloud APIs, no local data stored
+- **🤫 Silent Responses**: Actions execute and transcribe without spoken voice replies
+- **🔒 Privacy-First**: Local settings and workflow with bring-your-own API keys
 - **🎨 Beautiful UI**: Modern dashboard with activity history and settings
 
 ## 🚀 Quick Start
@@ -154,7 +156,11 @@ The default trigger is **Ctrl+Space**. You can change this in the Settings modal
 
 ### API Keys
 
-ListenOS comes with bundled API keys for immediate use. For heavy usage or production deployment, you can use your own keys:
+ListenOS requires your own Groq API key for self-hosted processing.
+
+First-run onboarding asks for this key, and you can update it later in **Settings -> System -> Groq API key**.
+
+You can also set keys in `.env.local`:
 
 1. Create/edit `.env.local` in the project root
 2. Add your keys:
@@ -166,6 +172,17 @@ ListenOS comes with bundled API keys for immediate use. For heavy usage or produ
 Get your keys:
 - **Groq**: [console.groq.com](https://console.groq.com)
 - **Deepgram**: [console.deepgram.com](https://console.deepgram.com)
+
+### Onboarding
+
+On first launch, onboarding walks through:
+
+1. Entering your Groq API key
+2. Selecting a microphone
+3. Running a microphone test
+4. Optionally adding starter command templates
+
+Bluetooth hands-free microphone profiles are blocked by default to prevent output-audio hijacking on headsets.
 
 ### Fully Local Routing (Desktop)
 
@@ -255,40 +272,19 @@ RUST_LOG=debug npm run tauri:dev
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the latest contribution process.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is proprietary software. See [LICENSE](LICENSE) for licensing terms.
 
 ## 🙏 Acknowledgments
 
 - [Tauri](https://tauri.app/) - For the amazing desktop framework
 - [Groq](https://groq.com/) - For ultra-fast AI inference
-- [Deepgram](https://deepgram.com/) - For real-time speech recognition
-
----
-
-## 📜 License
-
-**PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED**
-
-Copyright (c) 2025 **EvidentSphere**. All Rights Reserved.
-
-This software is proprietary and confidential. Unauthorized copying, modification, 
-distribution, or use of this software, via any medium, is strictly prohibited.
-
-See [LICENSE](LICENSE) for full terms and conditions.
-
----
+- [Deepgram](https://deepgram.com/) - Optional speech tooling integration
 
 <p align="center">
-  <strong>Developed by EvidentSphere</strong><br>
-  © 2025 EvidentSphere. All Rights Reserved.
+  <strong>Developed by ListenOS</strong><br>
+  © 2025 ListenOS. All Rights Reserved.
 </p>

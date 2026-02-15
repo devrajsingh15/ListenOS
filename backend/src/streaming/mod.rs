@@ -80,14 +80,35 @@ impl AudioStreamer {
         Ok(match_device)
     }
 
+    fn first_non_handsfree_input_device(host: &cpal::Host) -> Result<Option<cpal::Device>, String> {
+        let devices = host
+            .input_devices()
+            .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
+        for device in devices {
+            let candidate_name = Self::get_device_name(&device);
+            if !Self::is_handsfree_device_name(&candidate_name) {
+                return Ok(Some(device));
+            }
+        }
+        Ok(None)
+    }
+
     fn select_input_device(
         host: &cpal::Host,
         preferred_device_name: Option<&str>,
     ) -> Result<cpal::Device, String> {
         if let Some(preferred) = preferred_device_name {
             if let Some(device) = Self::find_input_device_by_name(host, preferred)? {
-                log::info!("Using preferred input device: {}", Self::get_device_name(&device));
-                return Ok(device);
+                let preferred_name = Self::get_device_name(&device);
+                if Self::is_handsfree_device_name(&preferred_name) {
+                    log::warn!(
+                        "Preferred input '{}' is Bluetooth hands-free and can hijack headphone output. Ignoring it.",
+                        preferred_name
+                    );
+                } else {
+                    log::info!("Using preferred input device: {}", preferred_name);
+                    return Ok(device);
+                }
             }
             log::warn!(
                 "Preferred input device '{}' not found, falling back to automatic selection",
@@ -101,21 +122,16 @@ impl AudioStreamer {
         if let Some(default) = default_device {
             if let Some(name) = default_name.as_ref() {
                 // On many Bluetooth headsets, opening the Hands-Free input can steal output audio route.
-                // If user didn't explicitly pick a mic, prefer a non-handsfree input when available.
+                // Always prefer a non-handsfree input when available.
                 if Self::is_handsfree_device_name(name) {
-                    let devices = host
-                        .input_devices()
-                        .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
-                    for device in devices {
+                    if let Some(device) = Self::first_non_handsfree_input_device(host)? {
                         let candidate_name = Self::get_device_name(&device);
-                        if !Self::is_handsfree_device_name(&candidate_name) {
-                            log::warn!(
-                                "Default input '{}' looks like Bluetooth hands-free. Using '{}' to avoid output audio hijack.",
-                                name,
-                                candidate_name
-                            );
-                            return Ok(device);
-                        }
+                        log::warn!(
+                            "Default input '{}' looks like Bluetooth hands-free. Using '{}' to avoid output audio hijack.",
+                            name,
+                            candidate_name
+                        );
+                        return Ok(device);
                     }
                 }
             }
@@ -123,12 +139,16 @@ impl AudioStreamer {
         }
 
         // Last-resort fallback.
+        if let Some(device) = Self::first_non_handsfree_input_device(host)? {
+            return Ok(device);
+        }
+
         let mut devices = host
             .input_devices()
             .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
-        devices
-            .next()
-            .ok_or_else(|| "No input device available. Please check microphone permissions.".to_string())
+        devices.next().ok_or_else(|| {
+            "No input device available. Please check microphone permissions.".to_string()
+        })
     }
 
     /// Start recording audio directly to internal buffer

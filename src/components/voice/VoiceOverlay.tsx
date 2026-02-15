@@ -6,8 +6,6 @@ import {
   isTauri,
   startListening,
   stopListening,
-  playTtsFromBase64,
-  speakWithFallbackTts,
   onShortcutPressed,
   onShortcutReleased,
   type VoiceProcessingResult,
@@ -109,20 +107,6 @@ export function VoiceOverlay({
       
       setLastResult(result);
       setActionType(result.action.action_type);
-
-      const ttsBase64 = typeof result.action?.payload?.tts_base64 === "string"
-        ? result.action.payload.tts_base64
-        : null;
-      if (ttsBase64) {
-        void playTtsFromBase64(ttsBase64).catch((err) => {
-          console.warn("[VoiceOverlay] Failed to play TTS audio:", err);
-        });
-      } else {
-        const fallbackSpeech = result.response_text || result.action?.response_text;
-        if (typeof fallbackSpeech === "string" && fallbackSpeech.trim().length > 0) {
-          speakWithFallbackTts(fallbackSpeech);
-        }
-      }
       
       // Check if this is a conversational response
       const isConversational = result.action.action_type === "Respond" || 

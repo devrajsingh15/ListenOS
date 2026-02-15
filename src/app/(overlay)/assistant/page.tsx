@@ -12,8 +12,6 @@ import {
   onShortcutPressed,
   onShortcutReleased,
   getAudioLevel,
-  playTtsFromBase64,
-  speakWithFallbackTts,
   VoiceProcessingResult,
   PendingAction,
 } from "@/lib/tauri";
@@ -25,13 +23,6 @@ type NotificationType = "first-transcription" | "word-learned" | null;
 function formatActionFeedback(result: VoiceProcessingResult): string | null {
   const actionType = result.action?.action_type;
   if (!actionType || actionType === "NoAction" || actionType === "TypeText") return null;
-  const ttsError = typeof result.action?.payload?.tts_error === "string"
-    ? result.action.payload.tts_error
-    : null;
-
-  if (ttsError && (actionType === "Respond" || actionType === "Clarify")) {
-    return `Voice reply unavailable: ${ttsError}`;
-  }
 
   switch (actionType) {
     case "OpenApp": return `Opening ${result.action?.payload?.app || "app"}`;
@@ -80,6 +71,8 @@ export default function AssistantPage() {
   const audioLevelInterval = useRef<NodeJS.Timeout | null>(null);
   const tooltipTimeout = useRef<NodeJS.Timeout | null>(null);
   const transcriptionCount = useRef(0);
+  const isStartingRef = useRef(false);
+  const pendingStopRef = useRef(false);
 
   useEffect(() => { setMounted(true); }, []);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -198,15 +191,7 @@ export default function AssistantPage() {
     return () => { if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current); };
   }, [state]);
 
-  const start = useCallback(async (handsfree = false) => {
-    if (stateRef.current !== "idle" || pendingAction) return;
-    try {
-      await startListening();
-      setState(handsfree ? "handsfree" : "listening");
-    } catch (e) { console.warn("Start failed:", e); }
-  }, [pendingAction]);
-
-  const stop = useCallback(async () => {
+  const stopInternal = useCallback(async () => {
     if (stateRef.current !== "listening" && stateRef.current !== "handsfree") return;
     const dictationOnly = stateRef.current === "handsfree";
     setState("processing");
@@ -220,20 +205,6 @@ export default function AssistantPage() {
 
       const isConversational = result.action?.action_type === "Respond" ||
         result.action?.action_type === "Clarify";
-
-      const ttsBase64 = typeof result.action?.payload?.tts_base64 === "string"
-        ? result.action.payload.tts_base64
-        : null;
-      if (ttsBase64) {
-        void playTtsFromBase64(ttsBase64).catch((err) => {
-          console.warn("Failed to play TTS audio:", err);
-        });
-      } else {
-        const fallbackSpeech = result.response_text || result.action?.response_text;
-        if (typeof fallbackSpeech === "string" && fallbackSpeech.trim().length > 0) {
-          speakWithFallbackTts(fallbackSpeech);
-        }
-      }
 
       if (result.action?.requires_confirmation) {
         const pending = await getPendingAction();
@@ -274,6 +245,36 @@ export default function AssistantPage() {
       setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
     }
   }, []);
+
+  const start = useCallback(async (handsfree = false) => {
+    if (stateRef.current !== "idle" || pendingAction || isStartingRef.current) return;
+    isStartingRef.current = true;
+    pendingStopRef.current = false;
+    setState(handsfree ? "handsfree" : "listening");
+    setFeedback(null);
+
+    try {
+      await startListening();
+    } catch (e) {
+      console.warn("Start failed:", e);
+      setState("error");
+      setTimeout(() => { setState("idle"); setFeedback(null); }, 800);
+    } finally {
+      isStartingRef.current = false;
+      if (pendingStopRef.current) {
+        pendingStopRef.current = false;
+        void stopInternal();
+      }
+    }
+  }, [pendingAction, stopInternal]);
+
+  const stop = useCallback(async () => {
+    if (isStartingRef.current) {
+      pendingStopRef.current = true;
+      return;
+    }
+    await stopInternal();
+  }, [stopInternal]);
 
   const handleConfirmPending = useCallback(async () => {
     if (!pendingAction) return;

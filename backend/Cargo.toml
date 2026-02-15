@@ -2,7 +2,7 @@
 name = "listenos-backend"
 version = "0.1.21"
 description = "ListenOS - AI-Powered Voice Control System"
-authors = ["EvidentSphere"]
+authors = ["ListenOS"]
 license = "PROPRIETARY"
 edition = "2021"
 

@@ -7,6 +7,8 @@ import {
   isTauri,
   getAudioDevices,
   setAudioDevice,
+  getLocalApiSettings,
+  setLocalApiSettings,
   getCommandTemplates,
   saveCustomCommand,
   type AudioDevice,
@@ -18,28 +20,44 @@ interface OnboardingModalProps {
   onComplete: () => void;
 }
 
-type Step = "welcome" | "microphone" | "test" | "commands" | "complete";
+type Step = "welcome" | "api-key" | "microphone" | "test" | "commands" | "complete";
+
+function isHandsFreeDeviceName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return normalized.includes("hands-free")
+    || normalized.includes("hands free")
+    || normalized.includes("ag audio")
+    || normalized.includes("hfp")
+    || normalized.includes("hsp");
+}
 
 export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
   const [step, setStep] = useState<Step>("welcome");
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>("");
+  const [deviceError, setDeviceError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<CustomCommand[]>([]);
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
   const [isTestingMic, setIsTestingMic] = useState(false);
   const [testSuccess, setTestSuccess] = useState(false);
+  const [groqApiKey, setGroqApiKey] = useState("");
+  const [apiSettingsSaving, setApiSettingsSaving] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
-      const [devs, tmpls] = await Promise.all([
+      const [devs, tmpls, localApi] = await Promise.all([
         getAudioDevices(),
         getCommandTemplates(),
+        getLocalApiSettings(),
       ]);
       setDevices(devs);
       setTemplates(tmpls);
+      setGroqApiKey(localApi.groq_api_key ?? "");
       
-      // Select default device
-      const defaultDevice = devs.find((d) => d.is_default);
+      // Select a safe default device (avoid hands-free profiles that can hijack output).
+      const defaultDevice = devs.find((d) => d.is_default && !isHandsFreeDeviceName(d.name))
+        ?? devs.find((d) => !isHandsFreeDeviceName(d.name));
       if (defaultDevice) {
         setSelectedDevice(defaultDevice.name);
       }
@@ -56,11 +74,53 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
   }, [isOpen, loadData]);
 
   const handleDeviceSelect = async (deviceName: string) => {
-    setSelectedDevice(deviceName);
+    setDeviceError(null);
     try {
       await setAudioDevice(deviceName);
+      setSelectedDevice(deviceName);
     } catch (error) {
       console.error("Failed to set device:", error);
+      setDeviceError("This microphone is not supported. Choose a non-hands-free input.");
+    }
+  };
+
+  const handleMicrophoneContinue = async () => {
+    if (!selectedDevice) {
+      return;
+    }
+    setDeviceError(null);
+    try {
+      await setAudioDevice(selectedDevice);
+      nextStep();
+    } catch (error) {
+      console.error("Failed to confirm selected device:", error);
+      setDeviceError("Failed to save microphone. Choose another input and try again.");
+    }
+  };
+
+  const handleApiKeyContinue = async () => {
+    const cleaned = groqApiKey.trim();
+    if (!cleaned) {
+      setApiKeyError("Groq API key is required.");
+      return;
+    }
+
+    setApiKeyError(null);
+    if (!isTauri()) {
+      nextStep();
+      return;
+    }
+
+    setApiSettingsSaving(true);
+    try {
+      const existing = await getLocalApiSettings();
+      await setLocalApiSettings(existing.use_remote_api, cleaned);
+      nextStep();
+    } catch (error) {
+      console.error("Failed to save Groq API key:", error);
+      setApiKeyError("Failed to save key. Please try again.");
+    } finally {
+      setApiSettingsSaving(false);
     }
   };
 
@@ -105,7 +165,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
     onComplete();
   };
 
-  const steps: Step[] = ["welcome", "microphone", "test", "commands", "complete"];
+  const steps: Step[] = ["welcome", "api-key", "microphone", "test", "commands", "complete"];
   const currentStepIndex = steps.indexOf(step);
 
   const nextStep = () => {
@@ -188,17 +248,22 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
             >
               <h2 className="mb-1.5 text-lg font-semibold text-foreground">Select Your Microphone</h2>
               <p className="mb-4 text-sm text-muted">
-                Choose the microphone you&apos;ll use for voice commands.
+                Choose a microphone for voice commands. Hands-free Bluetooth inputs are blocked to prevent audio hijacking.
               </p>
               
               <div className="mb-4 space-y-2 max-h-48 overflow-y-auto">
-                {devices.map((device) => (
+                {devices.map((device) => {
+                  const isHandsFree = isHandsFreeDeviceName(device.name);
+                  return (
                   <button
                     key={device.name}
                     onClick={() => handleDeviceSelect(device.name)}
+                    disabled={isHandsFree}
                     className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors ${
                       selectedDevice === device.name
                         ? "border-primary bg-primary/10"
+                        : isHandsFree
+                        ? "border-border opacity-60 cursor-not-allowed"
                         : "border-border hover:bg-sidebar-hover"
                     }`}
                   >
@@ -211,9 +276,11 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm text-foreground truncate">{device.name}</p>
-                      {device.is_default && (
+                      {isHandsFree ? (
+                        <p className="text-xs text-amber-500">Blocked: can hijack headphone output</p>
+                      ) : device.is_default ? (
                         <p className="text-xs text-muted">System default</p>
-                      )}
+                      ) : null}
                     </div>
                     {selectedDevice === device.name && (
                       <svg className="h-4 w-4 text-primary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -221,8 +288,12 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                       </svg>
                     )}
                   </button>
-                ))}
+                  );
+                })}
               </div>
+              {deviceError && (
+                <p className="mb-3 text-xs text-red-500">{deviceError}</p>
+              )}
 
               <div className="flex gap-2">
                 <button
@@ -232,11 +303,56 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                   Back
                 </button>
                 <button
-                  onClick={nextStep}
+                  onClick={() => void handleMicrophoneContinue()}
                   disabled={!selectedDevice}
                   className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
                 >
                   Continue
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {step === "api-key" && (
+            <motion.div
+              key="api-key"
+              initial={{ opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.15 }}
+            >
+              <h2 className="mb-1.5 text-lg font-semibold text-foreground">Add your Groq API key</h2>
+              <p className="mb-4 text-sm text-muted">
+                ListenOS requires your Groq key during onboarding for self-hosted voice processing.
+              </p>
+
+              <div className="mb-4 space-y-2">
+                <input
+                  type="password"
+                  value={groqApiKey}
+                  onChange={(e) => setGroqApiKey(e.target.value)}
+                  placeholder="gsk_..."
+                  className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  disabled={apiSettingsSaving}
+                />
+                {apiKeyError && <p className="text-xs text-red-500">{apiKeyError}</p>}
+                <p className="text-xs text-muted">Get your key at console.groq.com.</p>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={prevStep}
+                  disabled={apiSettingsSaving}
+                  className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-sidebar-hover disabled:opacity-50"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => void handleApiKeyContinue()}
+                  disabled={apiSettingsSaving || groqApiKey.trim().length === 0}
+                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {apiSettingsSaving ? "Saving..." : "Continue"}
                 </button>
               </div>
             </motion.div>

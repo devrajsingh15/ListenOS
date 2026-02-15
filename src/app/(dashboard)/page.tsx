@@ -1,9 +1,8 @@
 "use client";
 
-import { useAuth, SignedIn, SignedOut } from "@/context/AuthContext";
+import { useAuth } from "@/context/AuthContext";
 import { AppShell } from "@/components/layout/AppShell";
 import { DashboardContent } from "@/components/dashboard/DashboardContent";
-import { LandingPage } from "@/components/LandingPage";
 
 export default function DashboardPage() {
   const { isLoading } = useAuth();
@@ -21,18 +20,8 @@ export default function DashboardPage() {
   }
 
   return (
-    <>
-      {/* Show landing page for unauthenticated users */}
-      <SignedOut>
-        <LandingPage />
-      </SignedOut>
-
-      {/* Show dashboard for authenticated users */}
-      <SignedIn>
-        <AppShell>
-          <DashboardContent />
-        </AppShell>
-      </SignedIn>
-    </>
+    <AppShell>
+      <DashboardContent />
+    </AppShell>
   );
 }

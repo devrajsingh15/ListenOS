@@ -144,7 +144,7 @@ export function LandingPage() {
       {/* Footer */}
       <footer className="py-4 text-center">
         <p className="text-xs text-muted">
-          © 2025 EvidentSphere. All rights reserved.
+          © 2025 ListenOS. All rights reserved.
         </p>
       </footer>
     </div>

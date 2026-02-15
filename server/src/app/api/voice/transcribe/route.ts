@@ -7,11 +7,12 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 export async function POST(request: NextRequest) {
   try {
     // Check for API key auth (desktop app) first
-    const apiKey = request.headers.get("X-API-Key");
-    const validApiKey = process.env.LISTENOS_API_KEY || "listenos-desktop-app";
+    const apiKey = request.headers.get("X-API-Key")?.trim();
+    const validApiKey = process.env.LISTENOS_API_KEY?.trim();
+    const hasConfiguredApiKey = !!validApiKey;
     
     // If valid API key provided, skip Clerk auth entirely
-    let isAuthorized = apiKey === validApiKey;
+    let isAuthorized = !!(hasConfiguredApiKey && apiKey && apiKey === validApiKey);
     
     // Only check Clerk auth if no valid API key
     if (!isAuthorized) {
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
     }
     
     if (!isAuthorized) {
-      console.log("Auth failed - apiKey:", apiKey, "validApiKey:", validApiKey);
+      console.log("Auth failed for transcription request");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

@@ -94,7 +94,7 @@ export default function LandingPage() {
                 Download for Windows
               </Link>
               <a
-                href="https://github.com/EvidentSphere/ListenOS"
+                href="https://github.com/ListenOS/ListenOS"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-slate-800 text-white font-semibold hover:bg-slate-700 transition-all border border-slate-700"
@@ -154,7 +154,7 @@ export default function LandingPage() {
               Terms
             </a>
             <a 
-              href="https://github.com/EvidentSphere/ListenOS" 
+              href="https://github.com/ListenOS/ListenOS" 
               target="_blank" 
               rel="noopener noreferrer"
               className="text-sm text-slate-500 hover:text-slate-300 transition-colors"
