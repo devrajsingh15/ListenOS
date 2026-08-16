@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useContext, useState, useCallback, ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -96,11 +94,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const getToastStyles = (type: ToastType) => {
     switch (type) {
       case "success":
-        return "border border-success-border bg-success-surface text-success-text";
+        return "border border-positive/25 bg-positive/10 text-positive";
       case "error":
-        return "border border-danger-border bg-danger-surface text-danger";
+        return "border border-negative/25 bg-negative/10 text-negative";
       case "warning":
-        return "border border-warning-border bg-warning-surface text-warning";
+        return "border border-warning/25 bg-warning/10 text-warning";
       default:
         return "bg-card text-foreground border border-border";
     }
@@ -117,9 +115,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               initial={{ opacity: 0, y: 20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -20, scale: 0.95 }}
-              className={`rounded-lg px-4 py-3 shadow-lg ${getToastStyles(toast.type)}`}
+              className={`rounded-df px-4 py-3 shadow-lg ${getToastStyles(toast.type)}`}
             >
-              <p className="text-sm font-medium">{toast.message}</p>
+              <p className="text-sm font-normal">{toast.message}</p>
             </motion.div>
           ))}
         </AnimatePresence>

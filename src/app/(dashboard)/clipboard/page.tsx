@@ -1,14 +1,12 @@
-"use client";
-
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import {
-  isTauri,
+  isElectron,
   getClipboard,
   setClipboard,
   getClipboardHistory,
   type ClipboardEntry,
-} from "@/lib/tauri";
+} from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 
 export default function ClipboardPage() {
@@ -19,7 +17,7 @@ export default function ClipboardPage() {
   const [processing, setProcessing] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       loadClipboard();
     } else {
       setIsLoading(false);
@@ -169,8 +167,8 @@ export default function ClipboardPage() {
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Clipboard Tools</h1>
-          <p className="text-sm text-muted">
+          <h1 className="text-2xl font-normal text-foreground">Clipboard Tools</h1>
+          <p className="text-sm text-muted-foreground">
             Format, transform, and manage your clipboard content
           </p>
         </div>
@@ -180,10 +178,10 @@ export default function ClipboardPage() {
           <button
             onClick={() => setActiveTab("current")}
             className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors",
+              "px-4 py-2 text-sm font-normal transition-colors",
               activeTab === "current"
                 ? "border-b-2 border-primary text-primary"
-                : "text-muted hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             Current Clipboard
@@ -191,10 +189,10 @@ export default function ClipboardPage() {
           <button
             onClick={() => setActiveTab("history")}
             className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors",
+              "px-4 py-2 text-sm font-normal transition-colors",
               activeTab === "history"
                 ? "border-b-2 border-primary text-primary"
-                : "text-muted hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             History ({history.length})
@@ -205,12 +203,12 @@ export default function ClipboardPage() {
           <div className="grid gap-6 lg:grid-cols-3">
             {/* Current Content */}
             <div className="lg:col-span-2">
-              <div className="rounded-xl border border-border bg-card p-4">
+              <div className="rounded-df border border-border bg-card p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-medium text-foreground">Clipboard Content</h3>
+                  <h3 className="font-normal text-foreground">Clipboard Content</h3>
                   <button
                     onClick={loadClipboard}
-                    className="rounded-lg p-2 text-muted hover:bg-sidebar-hover hover:text-foreground"
+                    className="ui-button ui-button-ghost rounded-df p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
                     title="Refresh"
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -220,24 +218,24 @@ export default function ClipboardPage() {
                 </div>
                 {isLoading ? (
                   <div className="flex h-48 items-center justify-center">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    <div className="h-6 w-6 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
                   </div>
                 ) : (
                   <textarea
                     value={currentContent}
                     onChange={(e) => setCurrentContent(e.target.value)}
                     placeholder="Clipboard is empty. Copy some text to see it here."
-                    className="h-48 w-full resize-none rounded-lg border border-border bg-background p-3 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    className="ui-input h-48 w-full resize-none rounded-df border border-muted-border bg-input p-3 text-sm text-foreground placeholder:text-muted-foreground"
                   />
                 )}
-                <div className="mt-3 flex items-center justify-between text-xs text-muted">
+                <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
                   <span>
                     {currentContent.split(/\s+/).filter(Boolean).length} words,{" "}
                     {currentContent.length} characters
                   </span>
                   <button
                     onClick={() => handleCopyToClipboard(currentContent)}
-                    className="flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-sidebar-hover"
+                    className="flex items-center gap-1 rounded-df px-2 py-1 hover:bg-accent"
                   >
                     <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
@@ -250,8 +248,8 @@ export default function ClipboardPage() {
 
             {/* Quick Actions */}
             <div>
-              <div className="rounded-xl border border-border bg-card p-4">
-                <h3 className="mb-4 font-medium text-foreground">Quick Actions</h3>
+              <div className="rounded-df border border-border bg-card p-4">
+                <h3 className="mb-4 font-normal text-foreground">Quick Actions</h3>
                 <div className="space-y-2">
                   {[
                     { id: "bullet", label: "Bullet List", icon: "•" },
@@ -266,15 +264,15 @@ export default function ClipboardPage() {
                       onClick={() => handleQuickAction(action.id)}
                       disabled={!currentContent.trim() || processing !== null}
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                        currentContent.trim()
-                          ? "hover:bg-sidebar-hover"
-                          : "cursor-not-allowed opacity-50"
+                        "ui-button ui-button-ghost flex w-full items-center justify-start gap-3 rounded-df px-3 py-2 text-left text-sm transition-colors",
+                        currentContent.trim() && processing === null
+                          ? "text-muted-foreground hover:bg-accent hover:text-foreground"
+                          : "cursor-not-allowed text-disabled-foreground"
                       )}
                     >
-                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-xs font-medium text-primary">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-df bg-primary/10 text-xs font-normal text-primary">
                         {processing === action.id ? (
-                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                          <div className="h-4 w-4 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
                         ) : (
                           action.icon
                         )}
@@ -285,10 +283,10 @@ export default function ClipboardPage() {
                 </div>
 
                 <div className="mt-4 border-t border-border pt-4">
-                  <h4 className="mb-2 text-xs font-medium uppercase text-muted">
+                  <h4 className="mb-2 text-xs font-normal uppercase text-muted-foreground">
                     Voice Commands
                   </h4>
-                  <p className="text-xs text-muted">
+                  <p className="text-xs text-muted-foreground">
                     Try saying: &quot;Format my clipboard as a bullet list&quot; or &quot;Translate clipboard to Spanish&quot;
                   </p>
                 </div>
@@ -297,16 +295,16 @@ export default function ClipboardPage() {
           </div>
         ) : (
           /* History Tab */
-          <div className="rounded-xl border border-border bg-card">
+          <div className="rounded-df border border-border bg-card">
             {history.length === 0 ? (
               <div className="flex h-64 flex-col items-center justify-center text-center">
-                <div className="mb-4 rounded-full bg-primary/10 p-4">
+                <div className="mb-4 rounded-lg bg-primary/10 p-4">
                   <svg className="h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                   </svg>
                 </div>
-                <h3 className="mb-1 font-medium text-foreground">No clipboard history</h3>
-                <p className="text-sm text-muted">
+                <h3 className="mb-1 font-normal text-foreground">No clipboard history</h3>
+                <p className="text-sm text-muted-foreground">
                   Your clipboard history will appear here
                 </p>
               </div>
@@ -315,16 +313,16 @@ export default function ClipboardPage() {
                 {history.map((entry) => (
                   <div
                     key={entry.id}
-                    className="flex items-start gap-4 p-4 hover:bg-sidebar-hover/50"
+                    className="flex items-start gap-4 p-4 hover:bg-accent"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-df bg-primary/10 text-primary">
                       {getContentTypeIcon(entry.content_type)}
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm text-foreground">
                         {truncateText(entry.content, 100)}
                       </p>
-                      <div className="mt-1 flex items-center gap-3 text-xs text-muted">
+                      <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
                         <span>{entry.word_count} words</span>
                         <span>{entry.char_count} chars</span>
                         <span>{formatTime(entry.timestamp)}</span>
@@ -332,7 +330,7 @@ export default function ClipboardPage() {
                     </div>
                     <button
                       onClick={() => handleCopyToClipboard(entry.content)}
-                      className="shrink-0 rounded-lg p-2 text-muted hover:bg-sidebar-hover hover:text-foreground"
+                      className="shrink-0 rounded-df p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
                       title="Copy to clipboard"
                     >
                       <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect, useState } from "react";
-import { isTauri, getConversation, type ConversationMessage } from "@/lib/tauri";
+import { isElectron, getConversation, type ConversationMessage } from "@/lib/desktop";
 import { useToast } from "@/context/ToastContext";
 import { cn } from "@/lib/utils";
 
@@ -11,7 +9,7 @@ export function ActivityTable() {
   const { showSuccess } = useToast();
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       loadMessages();
       const interval = setInterval(loadMessages, 2000);
       return () => clearInterval(interval);
@@ -78,17 +76,17 @@ export function ActivityTable() {
 
   if (isLoading) {
     return (
-      <div className="animate-fade-in ui-surface-panel rounded-2xl p-10 text-center">
-        <div className="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <p className="mt-3 text-sm text-muted">Loading activity</p>
+      <div className="animate-fade-in ui-surface-panel rounded-df p-10 text-center">
+        <div className="mx-auto h-7 w-7 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
+        <p className="mt-3 text-sm text-muted-foreground">Loading activity</p>
       </div>
     );
   }
 
   if (messages.length === 0) {
     return (
-      <div className="animate-fade-in ui-surface-panel rounded-2xl p-10 text-center">
-        <p className="text-sm text-muted">No activity yet. Start dictating to populate this feed.</p>
+      <div className="animate-fade-in ui-surface-panel rounded-df p-10 text-center">
+        <p className="text-sm text-muted-foreground">No activity yet. Start dictating to populate this feed.</p>
       </div>
     );
   }
@@ -97,8 +95,8 @@ export function ActivityTable() {
     <div className="space-y-5">
       {Object.entries(groupedMessages).map(([dateKey, groupMessages]) => (
         <section key={dateKey} className="space-y-2">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{dateKey}</h3>
-          <div className="animate-fade-in ui-surface-panel overflow-hidden rounded-2xl">
+          <h3 className="text-xs font-normal uppercase tracking-[0.14em] text-muted-foreground">{dateKey}</h3>
+          <div className="animate-fade-in ui-surface-panel overflow-hidden rounded-df">
             {groupMessages.map((message, index) => (
               <button
                 key={message.id}
@@ -109,7 +107,7 @@ export function ActivityTable() {
                 )}
                 title="Click to copy"
               >
-                <span className="mt-0.5 w-16 shrink-0 text-xs font-medium uppercase tracking-[0.1em] text-muted">
+                <span className="mt-0.5 w-16 shrink-0 text-xs font-normal uppercase tracking-[0.1em] text-muted-foreground">
                   {formatTime(message.timestamp)}
                 </span>
                 <p className="text-sm leading-relaxed text-foreground">{message.content}</p>

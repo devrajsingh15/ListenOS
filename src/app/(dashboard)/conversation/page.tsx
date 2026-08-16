@@ -1,14 +1,12 @@
-"use client";
-
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import {
-  isTauri,
+  isElectron,
   getConversation,
   clearConversation,
   newConversationSession,
   type ConversationMessage,
-} from "@/lib/tauri";
+} from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/context/ToastContext";
 
@@ -18,7 +16,7 @@ export default function ConversationPage() {
   const { showSuccess } = useToast();
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       loadConversation();
     } else {
       setIsLoading(false);
@@ -104,15 +102,15 @@ export default function ConversationPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Conversation History</h1>
-            <p className="text-sm text-muted">
+            <h1 className="text-2xl font-normal text-foreground">Conversation History</h1>
+            <p className="text-sm text-muted-foreground">
               View your conversation with ListenOS including all commands and responses
             </p>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={handleNewSession}
-              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
+              className="ui-button ui-button-primary flex items-center gap-2 rounded-df bg-primary px-4 py-2 text-sm font-normal text-primary-foreground hover:bg-primary-hover"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -121,7 +119,7 @@ export default function ConversationPage() {
             </button>
             <button
               onClick={handleClear}
-              className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-sidebar-hover"
+              className="ui-button ui-button-outline flex items-center gap-2 rounded-df border border-muted-border bg-muted px-4 py-2 text-sm font-normal text-foreground hover:bg-accent"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -134,17 +132,17 @@ export default function ConversationPage() {
         {/* Messages List - Clean Flow-style */}
         {isLoading ? (
           <div className="flex h-64 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="h-8 w-8 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
           </div>
         ) : userMessages.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center text-center">
-            <div className="mb-4 rounded-full bg-primary/10 p-4">
+            <div className="mb-4 rounded-lg bg-primary/10 p-4">
               <svg className="h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </div>
-            <h3 className="mb-1 font-medium text-foreground">No conversation history</h3>
-            <p className="text-sm text-muted">
+            <h3 className="mb-1 font-normal text-foreground">No conversation history</h3>
+            <p className="text-sm text-muted-foreground">
               Start speaking with ListenOS to see your conversation here
             </p>
           </div>
@@ -152,25 +150,26 @@ export default function ConversationPage() {
           <div className="space-y-6">
             {Object.entries(groupedMessages).map(([dateKey, msgs]) => (
               <div key={dateKey}>
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
+                <h3 className="mb-3 text-xs font-normal uppercase tracking-wider text-muted-foreground">
                   {dateKey}
                 </h3>
-                <div className="rounded-lg border border-border bg-card overflow-hidden">
+                <div className="rounded-df border border-border bg-card overflow-hidden">
                   {msgs.map((msg, idx) => (
-                    <div
+                    <button
+                      type="button"
                       key={msg.id}
                       onClick={() => handleCopy(msg.content)}
                       className={cn(
-                        "flex gap-6 px-5 py-3 cursor-pointer transition-colors hover:bg-sidebar-hover",
+                        "flex w-full cursor-pointer gap-6 px-5 py-3 text-left transition-colors hover:bg-accent",
                         idx !== msgs.length - 1 && "border-b border-border"
                       )}
                       title="Click to copy"
                     >
-                      <span className="w-20 shrink-0 text-sm text-muted">
+                      <span className="w-20 shrink-0 text-sm text-muted-foreground">
                         {formatTime(msg.timestamp)}
                       </span>
                       <p className="text-sm text-foreground">{msg.content}</p>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>

@@ -14,7 +14,7 @@ export const dividerVariants = tv({
         "before:absolute before:left-0 before:top-1/2 before:h-px before:w-full before:-translate-y-1/2 before:bg-border",
       ],
       "line-text": [
-        "gap-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted",
+        "gap-2.5 text-[10px] font-normal uppercase tracking-[0.14em] text-muted-foreground",
         "before:h-px before:w-full before:flex-1 before:bg-border",
         "after:h-px after:w-full after:flex-1 after:bg-border",
       ],
@@ -23,9 +23,9 @@ export const dividerVariants = tv({
         "before:h-px before:w-full before:flex-1 before:bg-border",
         "after:h-px after:w-full after:flex-1 after:bg-border",
       ],
-      text: "px-2 py-1 text-xs text-muted",
+      text: "px-2 py-1 text-xs text-muted-foreground",
       "solid-text":
-        "rounded-full bg-sidebar-hover px-3 py-1 text-xs font-medium uppercase tracking-[0.14em] text-muted",
+        "rounded-lg bg-accent px-3 py-1 text-xs font-normal uppercase tracking-[0.14em] text-muted-foreground",
     },
   },
   defaultVariants: {

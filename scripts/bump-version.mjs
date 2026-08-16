@@ -10,7 +10,6 @@ const root = path.resolve(__dirname, "..");
 
 const packageJsonPath = path.join(root, "package.json");
 const packageLockPath = path.join(root, "package-lock.json");
-const tauriConfigPath = path.join(root, "backend", "tauri.conf.json");
 const cargoTomlPath = path.join(root, "backend", "Cargo.toml");
 
 const semverRegex = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -54,18 +53,17 @@ async function run() {
   await fs.writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
   console.log(`Updated package.json -> ${targetVersion}`);
 
-  const packageLock = JSON.parse(await fs.readFile(packageLockPath, "utf8"));
-  packageLock.version = targetVersion;
-  if (packageLock.packages && packageLock.packages[""]) {
-    packageLock.packages[""].version = targetVersion;
+  try {
+    const packageLock = JSON.parse(await fs.readFile(packageLockPath, "utf8"));
+    packageLock.version = targetVersion;
+    if (packageLock.packages && packageLock.packages[""]) {
+      packageLock.packages[""].version = targetVersion;
+    }
+    await fs.writeFile(packageLockPath, `${JSON.stringify(packageLock, null, 2)}\n`, "utf8");
+    console.log(`Updated package-lock.json -> ${targetVersion}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
   }
-  await fs.writeFile(packageLockPath, `${JSON.stringify(packageLock, null, 2)}\n`, "utf8");
-  console.log(`Updated package-lock.json -> ${targetVersion}`);
-
-  const tauriConfig = JSON.parse(await fs.readFile(tauriConfigPath, "utf8"));
-  tauriConfig.version = targetVersion;
-  await fs.writeFile(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`, "utf8");
-  console.log(`Updated backend/tauri.conf.json -> ${targetVersion}`);
 
   const cargoToml = await fs.readFile(cargoTomlPath, "utf8");
   const updatedCargoToml = updateCargoVersion(cargoToml, targetVersion);

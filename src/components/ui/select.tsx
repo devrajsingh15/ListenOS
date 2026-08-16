@@ -1,5 +1,3 @@
-"use client";
-
 import * as React from "react";
 import * as ScrollAreaPrimitives from "@radix-ui/react-scroll-area";
 import * as SelectPrimitives from "@radix-ui/react-select";
@@ -17,22 +15,22 @@ import { tv, type VariantProps } from "@/utils/tv";
 export const selectVariants = tv({
   slots: {
     triggerRoot: [
-      "group/trigger min-w-0 shrink-0 border border-border text-sm font-medium text-foreground",
-      "flex items-center text-left outline-none transition-colors duration-200",
-      "disabled:pointer-events-none disabled:opacity-50 data-[placeholder]:text-muted",
-      "focus:border-primary focus:outline-none",
+      "group/trigger min-w-0 shrink-0 border border-muted-border text-sm font-normal text-foreground",
+      "flex items-center text-left outline-none transition-colors duration-150",
+      "disabled:cursor-not-allowed disabled:text-disabled-foreground data-[placeholder]:text-muted-foreground",
+      "focus:border-primary focus:ring-2 focus:ring-primary/25",
     ],
     triggerArrow: [
-      "ml-auto size-4 shrink-0 text-muted transition duration-200 ease-out",
+      "ml-auto size-4 shrink-0 text-muted-foreground transition duration-150 ease-out",
       "group-data-[state=open]/trigger:rotate-180 group-hover/trigger:text-foreground",
-      "group-disabled/trigger:text-muted",
+      "group-disabled/trigger:text-disabled-foreground",
     ],
     triggerIcon: [
-      "h-4 w-auto min-w-0 shrink-0 object-contain text-muted transition duration-200 ease-out",
-      "group-hover/trigger:text-foreground group-disabled/trigger:text-muted",
+      "h-4 w-auto min-w-0 shrink-0 object-contain text-muted-foreground transition duration-150 ease-out",
+      "group-hover/trigger:text-foreground group-disabled/trigger:text-disabled-foreground",
     ],
     selectItemIcon: [
-      "size-4 shrink-0 text-muted [[data-disabled]_&]:text-muted/60",
+      "size-4 shrink-0 text-muted-foreground [[data-disabled]_&]:text-disabled-foreground",
     ],
   },
   variants: {
@@ -43,28 +41,28 @@ export const selectVariants = tv({
     },
     variant: {
       default: {
-        triggerRoot: "w-full rounded-lg bg-card hover:bg-sidebar-hover",
+        triggerRoot: "w-full rounded-df bg-input hover:bg-accent",
       },
       compact: {
-        triggerRoot: "w-auto rounded-lg bg-card hover:bg-sidebar-hover",
+        triggerRoot: "w-auto rounded-df bg-input hover:bg-accent",
       },
       compactForInput: {
         triggerRoot:
-          "w-auto rounded-md border-0 bg-transparent shadow-none hover:bg-sidebar-hover",
+          "w-auto rounded-df border-0 bg-transparent shadow-none hover:bg-accent",
       },
       inline: {
         triggerRoot:
-          "h-5 min-h-5 w-auto gap-0 rounded-none border-0 bg-transparent p-0 text-muted hover:bg-transparent hover:text-foreground data-[state=open]:text-foreground",
+          "h-5 min-h-5 w-auto gap-0 rounded-none border-0 bg-transparent p-0 text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=open]:text-foreground",
         triggerIcon:
-          "mr-1.5 text-muted group-hover/trigger:text-foreground group-data-[state=open]/trigger:text-foreground",
+          "mr-1.5 text-muted-foreground group-hover/trigger:text-foreground group-data-[state=open]/trigger:text-foreground",
         triggerArrow:
-          "ml-1 text-muted group-hover/trigger:text-foreground group-data-[state=open]/trigger:text-foreground",
+          "ml-1 text-muted-foreground group-hover/trigger:text-foreground group-data-[state=open]/trigger:text-foreground",
       },
     },
     hasError: {
       true: {
         triggerRoot:
-          "border-danger focus:border-danger focus:ring-2 focus:ring-danger/20",
+          "border-negative/25 focus:border-negative/25 focus:ring-2 focus:ring-negative/20",
       },
     },
   },
@@ -240,7 +238,7 @@ const SelectContent = React.forwardRef<
       <SelectPrimitives.Content
         ref={forwardedRef}
         className={cn(
-          "relative z-50 overflow-hidden rounded-xl border border-border bg-card shadow-2xl",
+          "relative z-50 overflow-hidden rounded-df border border-border bg-card shadow-2xl",
           "min-w-[--radix-select-trigger-width] max-w-[max(var(--radix-select-trigger-width),320px)]",
           "max-h-[--radix-select-content-available-height]",
           className,
@@ -263,7 +261,7 @@ const SelectContent = React.forwardRef<
             orientation="vertical"
             className="flex w-2 touch-none p-0.5"
           >
-            <ScrollAreaPrimitives.Thumb className="w-1 rounded-full bg-border" />
+            <ScrollAreaPrimitives.Thumb className="w-1 rounded-lg bg-muted-foreground" />
           </ScrollAreaPrimitives.Scrollbar>
         </ScrollAreaPrimitives.Root>
       </SelectPrimitives.Content>
@@ -283,10 +281,10 @@ const SelectItem = React.forwardRef<
     <SelectPrimitives.Item
       ref={forwardedRef}
       className={cn(
-        "group relative cursor-pointer select-none rounded-lg px-3 py-2 pr-9 text-sm text-foreground",
+        "group relative cursor-pointer select-none rounded-df px-3 py-2 pr-9 text-sm text-foreground",
         "flex items-center gap-2 outline-none transition-colors",
-        "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-        "data-[highlighted]:bg-sidebar-hover data-[highlighted]:outline-0",
+        "data-[disabled]:cursor-not-allowed data-[disabled]:text-disabled-foreground",
+        "data-[highlighted]:bg-accent data-[highlighted]:outline-0",
         "data-[state=checked]:bg-primary/10",
         size === "xsmall" && "gap-1.5 py-1.5 text-xs",
         className,

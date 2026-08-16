@@ -1,13 +1,11 @@
-"use client";
-
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import {
-  isTauri,
+  isElectron,
   getIntegrations,
   setIntegrationEnabled,
   type IntegrationInfo,
-} from "@/lib/tauri";
+} from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 
 export default function IntegrationsPage() {
@@ -16,7 +14,7 @@ export default function IntegrationsPage() {
   const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       loadIntegrations();
     } else {
       setIsLoading(false);
@@ -81,8 +79,8 @@ export default function IntegrationsPage() {
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold text-foreground">App Integrations</h1>
-          <p className="text-sm text-muted">
+          <h1 className="text-2xl font-normal text-foreground">App Integrations</h1>
+          <p className="text-sm text-muted-foreground">
             Control your favorite apps with voice commands
           </p>
         </div>
@@ -90,46 +88,46 @@ export default function IntegrationsPage() {
         {/* Integrations List */}
         {isLoading ? (
           <div className="flex h-64 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="h-8 w-8 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
           </div>
         ) : (
           <div className="space-y-4">
             {integrations.map((integration) => (
               <div
                 key={integration.name}
-                className="rounded-xl border border-border bg-card overflow-hidden"
+                className="rounded-df border border-border bg-card overflow-hidden"
               >
                 {/* Header */}
                 <div className="flex items-center gap-4 p-4">
                   <div
                     className={cn(
-                      "flex h-14 w-14 items-center justify-center rounded-xl",
+                      "flex h-14 w-14 items-center justify-center rounded-df",
                       integration.available
                         ? "bg-primary/10 text-primary"
-                        : "bg-surface-elevated text-muted"
+                        : "bg-card text-muted-foreground"
                     )}
                   >
                     {getIntegrationIcon(integration.name)}
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-foreground capitalize">
+                      <h3 className="font-normal text-foreground capitalize">
                         {integration.name}
                       </h3>
                       {!integration.available && (
-                        <span className="rounded-full border border-warning-border bg-warning-surface px-2 py-0.5 text-xs text-warning">
+                        <span className="rounded-lg border border-warning/25 bg-warning/10 px-2 py-0.5 text-xs text-warning">
                           Not Installed
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-muted">{integration.description}</p>
+                    <p className="text-sm text-muted-foreground">{integration.description}</p>
                   </div>
                   <div className="flex items-center gap-4">
                     <button
                       onClick={() => setExpandedIntegration(
                         expandedIntegration === integration.name ? null : integration.name
                       )}
-                      className="text-sm text-muted hover:text-foreground"
+                      className="text-sm text-muted-foreground hover:text-foreground"
                     >
                       {integration.actions.length} commands
                       <svg
@@ -144,19 +142,23 @@ export default function IntegrationsPage() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                       </svg>
                     </button>
-                    <label className="relative inline-flex cursor-pointer items-center">
+                    <label className={cn(
+                      "relative inline-flex items-center",
+                      integration.available ? "cursor-pointer" : "cursor-not-allowed"
+                    )}>
                       <input
                         type="checkbox"
+                        aria-label={`${integration.enabled ? "Disable" : "Enable"} ${integration.name}`}
                         checked={integration.enabled}
                         onChange={(e) => handleToggle(integration.name, e.target.checked)}
                         disabled={!integration.available}
                         className="peer sr-only"
                       />
                       <div className={cn(
-                        "peer h-6 w-11 rounded-full after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-border after:bg-background after:transition-all after:content-[''] peer-checked:after:translate-x-full peer-focus:outline-none",
+                        "peer h-6 w-11 rounded-lg border border-muted-border after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-lg after:border after:border-border after:bg-card after:transition-all after:content-[''] peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2",
                         integration.available 
-                          ? "bg-border peer-checked:bg-primary" 
-                          : "bg-border/70 cursor-not-allowed"
+                          ? "bg-muted peer-checked:bg-primary"
+                          : "bg-muted cursor-not-allowed"
                       )}></div>
                     </label>
                   </div>
@@ -164,21 +166,21 @@ export default function IntegrationsPage() {
 
                 {/* Expanded Actions */}
                 {expandedIntegration === integration.name && (
-                  <div className="border-t border-border bg-background/50 p-4">
-                    <h4 className="mb-3 text-sm font-medium text-foreground">Available Voice Commands</h4>
+                  <div className="border-t border-muted-border bg-muted p-4">
+                    <h4 className="mb-3 text-sm font-normal text-foreground">Available Voice Commands</h4>
                     <div className="grid gap-3 md:grid-cols-2">
                       {integration.actions.map((action) => (
                         <div
                           key={action.id}
-                          className="rounded-lg border border-border bg-card p-3"
+                          className="rounded-df border border-border bg-card p-3"
                         >
-                          <h5 className="font-medium text-foreground">{action.name}</h5>
-                          <p className="mb-2 text-xs text-muted">{action.description}</p>
+                          <h5 className="font-normal text-foreground">{action.name}</h5>
+                          <p className="mb-2 text-xs text-muted-foreground">{action.description}</p>
                           <div className="flex flex-wrap gap-1">
                             {action.example_phrases.slice(0, 2).map((phrase, i) => (
                               <span
                                 key={i}
-                                className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                                className="rounded-lg bg-primary/10 px-2 py-0.5 text-xs text-primary"
                               >
                                 &quot;{phrase}&quot;
                               </span>
@@ -195,9 +197,9 @@ export default function IntegrationsPage() {
         )}
 
         {/* Tips */}
-        <div className="rounded-xl border border-border bg-card p-4">
-          <h3 className="mb-2 font-medium text-foreground">Pro Tips</h3>
-          <ul className="space-y-1 text-sm text-muted">
+        <div className="rounded-df border border-border bg-card p-4">
+          <h3 className="mb-2 font-normal text-foreground">Pro Tips</h3>
+          <ul className="space-y-1 text-sm text-muted-foreground">
             <li>Say &quot;pause spotify&quot; or &quot;skip this song&quot; to control music</li>
             <li>Say &quot;mute discord&quot; or &quot;deafen discord&quot; during calls</li>
             <li>Say &quot;lock my computer&quot; or &quot;take a screenshot&quot; for system control</li>

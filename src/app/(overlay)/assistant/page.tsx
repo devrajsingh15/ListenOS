@@ -1,9 +1,7 @@
-"use client";
-
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  isTauri,
+  isElectron,
   getStatus,
   startListening,
   stopListening,
@@ -14,9 +12,9 @@ import {
   onShortcutPressed,
   onShortcutReleased,
   getAudioLevel,
+  listenDesktopEvent,
   PendingAction,
-} from "@/lib/tauri";
-import { listen } from "@tauri-apps/api/event";
+} from "@/lib/desktop";
 
 type AssistantState = "idle" | "listening" | "handsfree" | "processing" | "success" | "error";
 type NotificationType = "word-learned" | null;
@@ -28,8 +26,8 @@ const PILL_SPRING = { type: "spring" as const, stiffness: 520, damping: 34 };
 const CONTENT_FADE = { duration: 0.1 };
 
 export default function AssistantPage() {
+  const electronDesktop = isElectron();
   const [state, setState] = useState<AssistantState>("idle");
-  const [mounted, setMounted] = useState(false);
   const [rawAudioLevel, setRawAudioLevel] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
   const [wavePhase, setWavePhase] = useState(0);
@@ -45,9 +43,23 @@ export default function AssistantPage() {
   const isStartingRef = useRef(false);
   const pendingStopRef = useRef(false);
 
-  useEffect(() => { setMounted(true); }, []);
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { rawAudioLevelRef.current = rawAudioLevel; }, [rawAudioLevel]);
+
+  /* Simulate a changing microphone level so browser previews stay animated. */
+  useEffect(() => {
+    if (electronDesktop || (state !== "listening" && state !== "handsfree")) return;
+
+    const startedAt = performance.now();
+    const interval = window.setInterval(() => {
+      const elapsed = (performance.now() - startedAt) / 1000;
+      const primaryWave = (Math.sin(elapsed * 4.7) + 1) / 2;
+      const detailWave = (Math.sin(elapsed * 11.3 + 0.8) + 1) / 2;
+      setRawAudioLevel(0.12 + primaryWave * 0.55 + detailWave * 0.18);
+    }, 45);
+
+    return () => window.clearInterval(interval);
+  }, [electronDesktop, state]);
 
   /* ---------------------------------------------------------------- */
   /*  Smooth audio level via rAF                                       */
@@ -89,11 +101,11 @@ export default function AssistantPage() {
   /*  Backend events                                                   */
   /* ---------------------------------------------------------------- */
   useEffect(() => {
-    if (!mounted || !isTauri()) return;
+    if (!electronDesktop) return;
     let unlisten: (() => void) | undefined;
     const setup = async () => {
       try {
-        unlisten = await listen<{ word: string }>("word-learned", (event) => {
+        unlisten = await listenDesktopEvent<{ word: string }>("word-learned", (event) => {
           setLearnedWord(event.payload.word);
           setNotification("word-learned");
           setTimeout(() => setNotification(null), 3000);
@@ -102,18 +114,18 @@ export default function AssistantPage() {
     };
     setup();
     return () => { unlisten?.(); };
-  }, [mounted]);
+  }, [electronDesktop]);
 
   useEffect(() => {
-    if (!mounted || !isTauri()) return;
+    if (!electronDesktop) return;
     getPendingAction().then(setPendingAction).catch(() => undefined);
-  }, [mounted]);
+  }, [electronDesktop]);
 
   /* ---------------------------------------------------------------- */
   /*  Audio level polling                                              */
   /* ---------------------------------------------------------------- */
   useEffect(() => {
-    if ((state === "listening" || state === "handsfree") && isTauri()) {
+    if ((state === "listening" || state === "handsfree") && isElectron()) {
       let stopped = false;
       const poll = async () => {
         if (stopped) return;
@@ -129,13 +141,14 @@ export default function AssistantPage() {
       return () => { stopped = true; if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current); };
     } else {
       if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current);
-      setRawAudioLevel(0);
+      const resetTimer = window.setTimeout(() => setRawAudioLevel(0), 0);
+      return () => window.clearTimeout(resetTimer);
     }
     return () => { if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current); };
   }, [state]);
 
   useEffect(() => {
-    if (!(state === "listening" || state === "handsfree" || state === "processing") || !isTauri()) {
+    if (!(state === "listening" || state === "handsfree" || state === "processing") || !isElectron()) {
       if (statusInterval.current) clearTimeout(statusInterval.current);
       return;
     }
@@ -180,6 +193,16 @@ export default function AssistantPage() {
   /* ---------------------------------------------------------------- */
   const stopInternal = useCallback(async () => {
     if (stateRef.current !== "listening" && stateRef.current !== "handsfree") return;
+
+    if (!isElectron()) {
+      setState("processing");
+      setTimeout(() => {
+        setState("success");
+        setTimeout(() => setState("idle"), 900);
+      }, 900);
+      return;
+    }
+
     const dictationOnly = stateRef.current === "handsfree";
     setState("processing");
     try {
@@ -226,6 +249,12 @@ export default function AssistantPage() {
     isStartingRef.current = true;
     pendingStopRef.current = false;
     setState(handsfree ? "handsfree" : "listening");
+
+    if (!isElectron()) {
+      isStartingRef.current = false;
+      return;
+    }
+
     try {
       await startListening();
     } catch {
@@ -257,11 +286,17 @@ export default function AssistantPage() {
 
   const cancel = useCallback(() => setState("idle"), []);
 
+  const showBrowserPreview = useCallback((previewState: "listening" | "handsfree" | "processing" | "error") => {
+    setStatusNotice(null);
+    setPendingAction(null);
+    setState(previewState);
+  }, []);
+
   /* ---------------------------------------------------------------- */
   /*  Shortcuts                                                        */
   /* ---------------------------------------------------------------- */
   useEffect(() => {
-    if (!mounted || !isTauri()) return;
+    if (!electronDesktop) return;
     let u1: (() => void) | undefined;
     let u2: (() => void) | undefined;
     let u3: (() => void) | undefined;
@@ -283,25 +318,52 @@ export default function AssistantPage() {
     };
     setup();
     return () => { u1?.(); u2?.(); u3?.(); };
-  }, [mounted, start, stop]);
+  }, [electronDesktop, start, stop]);
 
   /* ---------------------------------------------------------------- */
   /*  Pill dimensions                                                  */
   /* ---------------------------------------------------------------- */
-  const isActive = state !== "idle";
-  const pillWidth = state === "handsfree" ? 148 : state === "listening" ? 110 : state === "processing" ? 80 : state === "success" || state === "error" ? 52 : 44;
-  const pillHeight = state === "idle" ? 22 : 28;
-
-  /* Gradient border animation speed per state */
-  const borderSpeed = state === "processing" ? "1.8s" : "3s";
-
-  /* Audio-reactive glow intensity for listening/handsfree */
-  const glowIntensity = (state === "listening" || state === "handsfree")
-    ? 0.25 + audioLevel * 0.35
-    : isActive ? 0.3 : 0;
+  const pillWidth = state === "handsfree" ? 148 : state === "listening" ? 110 : state === "processing" || state === "error" ? 64 : state === "success" ? 52 : 40;
+  const pillHeight = state === "idle" ? 16 : 28;
 
   return (
-    <div className="h-full w-full flex flex-col items-center justify-end pb-2 relative" style={{ background: "transparent" }}>
+    <div className="relative flex h-full w-full flex-col items-center justify-end py-[6px]" style={{ background: "transparent" }}>
+      {!electronDesktop && (
+        <div
+          className="keep-bg absolute left-1/2 top-6 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 rounded-xl border border-border p-4 shadow-2xl"
+          style={{ background: "var(--card)" }}
+        >
+          <div className="keep-bg mb-3 flex items-start justify-between gap-4">
+            <div className="keep-bg">
+              <p className="keep-bg text-sm text-foreground">Animation preview</p>
+              <p className="keep-bg mt-1 text-xs text-muted-foreground">Test the real overlay states without the desktop microphone.</p>
+            </div>
+            <span className="keep-bg rounded-df border border-border bg-muted px-2 py-1 text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+              Browser only
+            </span>
+          </div>
+          <div className="keep-bg grid grid-cols-2 gap-2">
+            {([
+              { state: "listening", label: "Listening", detail: "Reactive wave" },
+              { state: "handsfree", label: "Hands-free", detail: "Wave + controls" },
+              { state: "processing", label: "Processing", detail: "Loading dashes" },
+              { state: "error", label: "Error", detail: "Failure shake" },
+            ] as const).map((preview) => (
+              <button
+                key={preview.state}
+                type="button"
+                aria-pressed={state === preview.state}
+                onClick={() => showBrowserPreview(preview.state)}
+                className="keep-bg rounded-lg border border-muted-border bg-muted px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-accent aria-pressed:border-primary/60 aria-pressed:bg-primary/10"
+              >
+                <span className="keep-bg block text-xs text-foreground">{preview.label}</span>
+                <span className="keep-bg mt-0.5 block text-[10px] text-muted-foreground">{preview.detail}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Notification */}
       <AnimatePresence>
         {notification && learnedWord && (
@@ -309,11 +371,11 @@ export default function AssistantPage() {
             initial={{ opacity: 0, y: 10, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.96 }}
-            className="absolute bottom-full mb-3 h-8 px-3 rounded-full keep-bg flex items-center gap-2"
-            style={{ background: "rgba(20,20,20,0.92)", border: "1px solid rgba(255,255,255,0.1)" }}
+            className="absolute bottom-full mb-3 h-8 px-3 rounded-lg keep-bg flex items-center gap-2"
+            style={{ background: "var(--muted)", border: "1px solid var(--muted-border)" }}
           >
-            <div className="w-2 h-2 rounded-full bg-green-400 keep-bg" />
-            <span className="text-[10px] text-white/80 truncate max-w-36">{learnedWord}</span>
+            <div className="w-2 h-2 rounded-lg bg-positive keep-bg" />
+            <span className="text-[10px] text-muted-foreground truncate max-w-36">{learnedWord}</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -324,10 +386,10 @@ export default function AssistantPage() {
             initial={{ opacity: 0, y: 10, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.96 }}
-            className="absolute bottom-full mb-3 max-w-[320px] px-3 py-2 rounded-2xl keep-bg"
-            style={{ background: "rgba(20,20,20,0.94)", border: "1px solid rgba(255,255,255,0.1)" }}
+            className="absolute bottom-full mb-3 max-w-[320px] px-3 py-2 rounded-df keep-bg"
+            style={{ background: "var(--muted)", border: "1px solid var(--muted-border)" }}
           >
-            <span className="text-[11px] text-white/80">{statusNotice}</span>
+            <span className="text-[11px] text-muted-foreground">{statusNotice}</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -339,15 +401,15 @@ export default function AssistantPage() {
             initial={{ opacity: 0, y: 14, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.96 }}
-            className="absolute bottom-full mb-3 px-4 py-3 rounded-2xl keep-bg w-[320px]"
-            style={{ background: "rgba(20,20,20,0.98)", border: "1px solid rgba(255,255,255,0.1)" }}
+            className="absolute bottom-full mb-3 px-4 py-3 rounded-df keep-bg w-[320px]"
+            style={{ background: "var(--muted)", border: "1px solid var(--muted-border)" }}
           >
             <div className="flex flex-col gap-2">
-              <span className="text-[10px] tracking-wide uppercase text-yellow-300/90">Confirmation required</span>
-              <span className="text-sm text-white/95">{pendingAction.summary}</span>
+              <span className="text-[10px] tracking-wide uppercase text-warning">Confirmation required</span>
+              <span className="text-sm text-foreground">{pendingAction.summary}</span>
               <div className="flex items-center gap-2 mt-1">
-                <button onClick={handleConfirmPending} className="px-3 py-1.5 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-300 text-xs font-medium transition-colors">Confirm</button>
-                <button onClick={handleCancelPending} className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-medium transition-colors">Cancel</button>
+                <button onClick={handleConfirmPending} className="ui-button px-3 py-1.5 rounded-df bg-positive/10 hover:bg-positive/20 text-positive text-xs font-normal transition-colors">Confirm</button>
+                <button onClick={handleCancelPending} className="ui-button px-3 py-1.5 rounded-df bg-negative/10 hover:bg-negative/20 text-negative text-xs font-normal transition-colors">Cancel</button>
               </div>
             </div>
           </motion.div>
@@ -356,87 +418,26 @@ export default function AssistantPage() {
 
       {/* ==================== PILL ==================== */}
       <motion.div
-        className="relative rounded-full cursor-pointer keep-bg"
+        className="relative rounded-lg cursor-pointer keep-bg"
         style={{ willChange: "transform, width, height" }}
         initial={false}
         animate={{ width: pillWidth, height: pillHeight }}
         transition={PILL_SPRING}
         onClick={() => { if (state === "idle") start(true); }}
       >
-        {/* Soft multi-color glow (trimmed bottom to avoid clipping flatten) */}
-        <motion.div
-          className="absolute rounded-full overflow-hidden keep-bg"
+        {/* Every state keeps the same neutral border. */}
+        <div
+          className="absolute rounded-lg keep-bg overflow-hidden"
           style={{
-            top: -3,
-            right: -3,
-            left: -3,
-            bottom: -0.5,
-            filter: "blur(8px)",
-            pointerEvents: "none",
-            willChange: "opacity",
-          }}
-          animate={{ opacity: glowIntensity }}
-          transition={{ duration: 0.35, ease: "linear" }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              width: "165%",
-              aspectRatio: "1",
-              borderRadius: "50%",
-              background: "conic-gradient(#f43f5e, #a855f7, #3b82f6, #06b6d4, #10b981, #eab308, #f43f5e)",
-              animation: `spin-gradient ${borderSpeed} linear infinite`,
-              transform: "translate(-50%, -50%) translateZ(0)",
-              willChange: "transform",
-              backfaceVisibility: "hidden",
-            }}
-          />
-        </motion.div>
-
-        {/* Rotating gradient border (constant 2px inner ring) */}
-        <motion.div
-          className="absolute inset-0 rounded-full overflow-hidden keep-bg"
-          style={{ pointerEvents: "none", willChange: "opacity" }}
-          animate={{ opacity: isActive ? 1 : 0 }}
-          transition={{ duration: 0.22 }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              width: "165%",
-              aspectRatio: "1",
-              borderRadius: "50%",
-              background: "conic-gradient(#f43f5e, #ec4899, #a855f7, #6366f1, #3b82f6, #06b6d4, #10b981, #22c55e, #eab308, #f59e0b, #ef4444, #f43f5e)",
-              animation: `spin-gradient ${borderSpeed} linear infinite`,
-              transform: "translate(-50%, -50%) translateZ(0)",
-              willChange: "transform",
-              backfaceVisibility: "hidden",
-            }}
-          />
-        </motion.div>
-
-        {/* Pill body (inset by 2px in active mode for a perfectly even border thickness) */}
-        <motion.div
-          className="absolute rounded-full keep-bg overflow-hidden"
-          initial={false}
-          animate={{ inset: isActive ? 2 : 0 }}
-          transition={{ duration: 0.22, ease: "easeOut" }}
-          style={{
-            background: "rgba(18, 18, 22, 0.97)",
-            border: isActive ? "none" : "1px solid rgba(255,255,255,0.10)",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
-            willChange: "inset",
+            inset: 0,
+            background: "var(--muted)",
+            border: "1px solid color-mix(in oklab, var(--muted-foreground) 38%, var(--muted-border))",
           }}
         />
 
         {/* Content */}
-        <div className="relative z-10 flex h-full w-full items-center justify-center overflow-hidden rounded-full">
-          <AnimatePresence mode="popLayout">
-            {state === "idle" && <IdlePill key="idle" />}
+        <div className="relative z-10 flex h-full w-full items-center justify-center overflow-hidden rounded-lg">
+          <AnimatePresence initial={false}>
             {state === "listening" && <ListeningWave key="listening" level={audioLevel} phase={wavePhase} />}
             {state === "handsfree" && <HandsfreePill key="handsfree" level={audioLevel} phase={wavePhase} onCancel={cancel} onStop={stop} />}
             {state === "processing" && <ProcessingPill key="processing" />}
@@ -446,36 +447,6 @@ export default function AssistantPage() {
         </div>
       </motion.div>
     </div>
-  );
-}
-
-/* ================================================================== */
-/*  IDLE — soft breathing pulse                                        */
-/* ================================================================== */
-function IdlePill() {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={CONTENT_FADE}
-      className="flex items-center justify-center gap-[4px] px-2"
-    >
-      {[0, 1, 2, 3, 4].map((i) => (
-        <motion.div
-          key={i}
-          className="w-[3px] h-[3px] rounded-full keep-bg"
-          style={{ background: "rgba(255,255,255,0.35)" }}
-          animate={{ opacity: [0.25, 0.55, 0.25] }}
-          transition={{
-            duration: 2.4,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: i * 0.18,
-          }}
-        />
-      ))}
-    </motion.div>
   );
 }
 
@@ -507,20 +478,21 @@ function ListeningWave({ level, phase }: { level: number; phase: number }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={CONTENT_FADE}
-      className="flex items-center justify-center gap-[1.5px] px-3 h-full"
+      className="absolute inset-0 flex items-center justify-center gap-[1.5px] px-3"
     >
       {heights.map((h, i) => {
         const intensity = h / 20;
         return (
           <div
             key={i}
-            className="rounded-full keep-bg"
+            className="rounded-lg keep-bg"
             style={{
               width: "2px",
               height: `${h.toFixed(1)}px`,
-              background: `rgba(${120 + Math.round(intensity * 80)}, ${150 + Math.round(intensity * 60)}, 255, ${0.5 + intensity * 0.5})`,
+              background: "var(--primary)",
+              opacity: 0.5 + intensity * 0.5,
               transition: "height 0.035s linear, background 0.08s linear",
-              boxShadow: energy > 0.3 ? `0 0 ${Math.round(intensity * 6)}px rgba(130,160,255,${intensity * 0.4})` : "none",
+              boxShadow: energy > 0.3 ? `0 0 ${Math.round(intensity * 6)}px color-mix(in oklab, var(--primary) 40%, transparent)` : "none",
             }}
           />
         );
@@ -533,7 +505,7 @@ function ListeningWave({ level, phase }: { level: number; phase: number }) {
 /*  HANDSFREE — waveform + controls                                    */
 /* ================================================================== */
 function HandsfreePill({ level, phase, onCancel, onStop }: { level: number; phase: number; onCancel: () => void; onStop: () => void }) {
-  const barCount = 10;
+  const barCount = 16;
   const energy = Math.pow(Math.max(0, Math.min(1, level)), 0.8);
 
   const heights = useMemo(() => {
@@ -544,7 +516,7 @@ function HandsfreePill({ level, phase, onCancel, onStop }: { level: number; phas
       const bell = Math.exp(-dist * dist * 2.2);
       const w1 = 0.7 + 0.3 * Math.sin(phase + i * 0.6);
       const w2 = 0.85 + 0.15 * Math.sin(phase * 1.7 + i * 1.1);
-      h.push(2 + 16 * energy * bell * w1 * w2);
+      h.push(3 + 19 * energy * bell * w1 * w2);
     }
     return h;
   }, [energy, phase]);
@@ -555,27 +527,29 @@ function HandsfreePill({ level, phase, onCancel, onStop }: { level: number; phas
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={CONTENT_FADE}
-      className="flex items-center justify-between w-full px-1.5"
+      className="absolute inset-0 flex items-center justify-between px-1.5"
     >
       <button
         onClick={(e) => { e.stopPropagation(); onCancel(); }}
-        className="w-5 h-5 rounded-full bg-white/8 hover:bg-white/15 flex items-center justify-center transition-colors keep-bg flex-shrink-0"
+        aria-label="Cancel hands-free listening"
+        className="w-5 h-5 rounded-lg bg-accent hover:bg-muted flex items-center justify-center transition-colors keep-bg flex-shrink-0"
       >
-        <svg className="w-2.5 h-2.5 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+        <svg className="w-2.5 h-2.5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      <div className="flex items-center justify-center gap-[1.5px] flex-1 mx-1 h-[18px]">
+      <div className="mx-1 flex h-6 flex-1 items-center justify-center gap-[1.5px]">
         {heights.map((h, i) => {
-          const intensity = h / 18;
+          const intensity = h / 22;
           return (
             <div
               key={i}
-              className="rounded-full keep-bg"
+              className="rounded-lg keep-bg"
               style={{
                 width: "2px",
                 height: `${h.toFixed(1)}px`,
-                background: `rgba(${120 + Math.round(intensity * 80)}, ${150 + Math.round(intensity * 60)}, 255, ${0.5 + intensity * 0.5})`,
+                background: "var(--primary)",
+                opacity: 0.5 + intensity * 0.5,
                 transition: "height 0.035s linear",
               }}
             />
@@ -584,17 +558,18 @@ function HandsfreePill({ level, phase, onCancel, onStop }: { level: number; phas
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onStop(); }}
-        className="w-5 h-5 rounded-full flex items-center justify-center transition-colors keep-bg flex-shrink-0"
-        style={{ background: "rgba(239,68,68,0.9)" }}
+        aria-label="Stop and process hands-free listening"
+        className="w-5 h-5 rounded-lg flex items-center justify-center transition-colors keep-bg flex-shrink-0"
+        style={{ background: "var(--negative)" }}
       >
-        <div className="w-[7px] h-[7px] rounded-[1.5px] bg-white keep-bg" />
+        <div className="w-[7px] h-[7px] rounded-sm bg-primary-foreground keep-bg" />
       </button>
     </motion.div>
   );
 }
 
 /* ================================================================== */
-/*  PROCESSING — traveling shimmer wave                                */
+/*  PROCESSING — centered spinner                                     */
 /* ================================================================== */
 function ProcessingPill() {
   return (
@@ -603,25 +578,13 @@ function ProcessingPill() {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={CONTENT_FADE}
-      className="flex items-center justify-center gap-[6px] px-3"
+      className="absolute inset-0 grid place-items-center"
     >
-      {[0, 1, 2].map((i) => (
-        <motion.div
-          key={i}
-          className="w-[4px] h-[4px] rounded-full keep-bg"
-          style={{ background: "rgba(200,190,255,0.9)" }}
-          animate={{
-            opacity: [0.25, 1, 0.25],
-            scale: [0.8, 1.15, 0.8],
-          }}
-          transition={{
-            duration: 1.2,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: i * 0.25,
-          }}
-        />
-      ))}
+      <motion.div
+        className="keep-bg h-3.5 w-3.5 rounded-full border-2 border-primary/25 border-t-primary"
+        animate={{ rotate: 360 }}
+        transition={{ duration: 0.72, repeat: Infinity, ease: "linear" }}
+      />
     </motion.div>
   );
 }
@@ -636,17 +599,17 @@ function SuccessPill() {
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
       transition={{ type: "spring", stiffness: 500, damping: 25 }}
-      className="flex items-center justify-center"
+      className="absolute inset-0 flex items-center justify-center"
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round">
         <motion.path
           d="M5 13l4 4L19 7"
-          stroke="#4ade80"
+          stroke="var(--positive)"
           strokeWidth="2.5"
           initial={{ pathLength: 0 }}
           animate={{ pathLength: 1 }}
           transition={{ duration: 0.25, ease: "easeOut", delay: 0.05 }}
-          style={{ filter: "drop-shadow(0 0 4px rgba(74,222,128,0.6))" }}
+          style={{ filter: "drop-shadow(0 0 4px color-mix(in oklab, var(--positive) 60%, transparent))" }}
         />
       </svg>
     </motion.div>
@@ -654,26 +617,24 @@ function SuccessPill() {
 }
 
 /* ================================================================== */
-/*  ERROR — X with shake                                               */
+/*  ERROR — centered X                                                 */
 /* ================================================================== */
 function ErrorPill() {
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.3 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.8 }}
-      transition={{ type: "spring", stiffness: 500, damping: 25 }}
-      className="flex items-center justify-center"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={CONTENT_FADE}
+      className="absolute inset-0 flex items-center justify-center"
     >
-      <motion.svg
+      <svg
         width="13" height="13" viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round"
-        animate={{ x: [0, -2.5, 2.5, -1.5, 1.5, 0] }}
-        transition={{ duration: 0.35, ease: "easeInOut" }}
-        style={{ filter: "drop-shadow(0 0 4px rgba(248,113,113,0.6))" }}
+        style={{ filter: "drop-shadow(0 0 4px color-mix(in oklab, var(--negative) 60%, transparent))" }}
       >
-        <path d="M18 6L6 18" stroke="#f87171" strokeWidth="2.5" />
-        <path d="M6 6l12 12" stroke="#f87171" strokeWidth="2.5" />
-      </motion.svg>
+        <path d="M18 6L6 18" stroke="var(--negative)" strokeWidth="2.5" />
+        <path d="M6 6l12 12" stroke="var(--negative)" strokeWidth="2.5" />
+      </svg>
     </motion.div>
   );
 }

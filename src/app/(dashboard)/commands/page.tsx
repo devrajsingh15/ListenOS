@@ -1,10 +1,8 @@
-"use client";
-
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import * as Select from "@/components/ui/select";
 import {
-  isTauri,
+  isElectron,
   getCustomCommands,
   getCommandTemplates,
   saveCustomCommand,
@@ -14,7 +12,7 @@ import {
   importCustomCommands,
   type CustomCommand,
   type ActionStep,
-} from "@/lib/tauri";
+} from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 
 const ACTION_TYPES = [
@@ -37,7 +35,7 @@ export default function CommandsPage() {
   const [showEditor, setShowEditor] = useState(false);
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       loadData();
     } else {
       setIsLoading(false);
@@ -163,27 +161,27 @@ export default function CommandsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Custom Commands</h1>
-            <p className="text-sm text-muted">
+            <h1 className="text-2xl font-normal text-foreground">Custom Commands</h1>
+            <p className="text-sm text-muted-foreground">
               Create voice-triggered command sequences for common tasks
             </p>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={handleImport}
-              className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-sidebar-hover"
+              className="ui-button ui-button-outline flex items-center gap-2 rounded-df border border-muted-border bg-muted px-3 py-2 text-sm font-normal text-foreground hover:bg-accent"
             >
               Import
             </button>
             <button
               onClick={handleExport}
-              className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-sidebar-hover"
+              className="ui-button ui-button-outline flex items-center gap-2 rounded-df border border-muted-border bg-muted px-3 py-2 text-sm font-normal text-foreground hover:bg-accent"
             >
               Export
             </button>
             <button
               onClick={createNewCommand}
-              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
+              className="ui-button ui-button-primary flex items-center gap-2 rounded-df bg-primary px-4 py-2 text-sm font-normal text-primary-foreground hover:bg-primary-hover"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -198,10 +196,10 @@ export default function CommandsPage() {
           <button
             onClick={() => setActiveTab("commands")}
             className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors",
+              "px-4 py-2 text-sm font-normal transition-colors",
               activeTab === "commands"
                 ? "border-b-2 border-primary text-primary"
-                : "text-muted hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             My Commands ({commands.length})
@@ -209,10 +207,10 @@ export default function CommandsPage() {
           <button
             onClick={() => setActiveTab("templates")}
             className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors",
+              "px-4 py-2 text-sm font-normal transition-colors",
               activeTab === "templates"
                 ? "border-b-2 border-primary text-primary"
-                : "text-muted hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             Templates ({templates.length})
@@ -222,23 +220,23 @@ export default function CommandsPage() {
         {/* Content */}
         {isLoading ? (
           <div className="flex h-64 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="h-8 w-8 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
           </div>
         ) : activeTab === "commands" ? (
           commands.length === 0 ? (
-            <div className="flex h-64 flex-col items-center justify-center rounded-xl border border-border bg-card text-center">
-              <div className="mb-4 rounded-full bg-primary/10 p-4">
+            <div className="flex h-64 flex-col items-center justify-center rounded-df border border-border bg-card text-center">
+              <div className="mb-4 rounded-lg bg-primary/10 p-4">
                 <svg className="h-8 w-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <h3 className="mb-1 font-medium text-foreground">No custom commands yet</h3>
-              <p className="mb-4 text-sm text-muted">
+              <h3 className="mb-1 font-normal text-foreground">No custom commands yet</h3>
+              <p className="mb-4 text-sm text-muted-foreground">
                 Create your own voice-triggered commands or use a template
               </p>
               <button
                 onClick={() => setActiveTab("templates")}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
+                className="ui-button ui-button-primary rounded-df bg-primary px-4 py-2 text-sm font-normal text-primary-foreground hover:bg-primary-hover"
               >
                 Browse Templates
               </button>
@@ -248,40 +246,41 @@ export default function CommandsPage() {
               {commands.map((cmd) => (
                 <div
                   key={cmd.id}
-                  className="rounded-xl border border-border bg-card p-4"
+                  className="rounded-df border border-border bg-card p-4"
                 >
                   <div className="mb-3 flex items-start justify-between">
                     <div>
-                      <h3 className="font-medium text-foreground">{cmd.name}</h3>
+                      <h3 className="font-normal text-foreground">{cmd.name}</h3>
                       <p className="text-sm text-primary">&quot;{cmd.trigger_phrase}&quot;</p>
                     </div>
                     <label className="relative inline-flex cursor-pointer items-center">
                       <input
                         type="checkbox"
+                        aria-label={`${cmd.enabled ? "Disable" : "Enable"} ${cmd.name}`}
                         checked={cmd.enabled}
                         onChange={(e) => handleToggleEnabled(cmd.id, e.target.checked)}
                         className="peer sr-only"
                       />
-                      <div className="peer h-5 w-9 rounded-full bg-border after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-border after:bg-background after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-focus:outline-none"></div>
+                      <div className="peer h-5 w-9 rounded-lg border border-muted-border bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-lg after:border after:border-border after:bg-card after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2"></div>
                     </label>
                   </div>
-                  <p className="mb-3 text-sm text-muted line-clamp-2">{cmd.description}</p>
+                  <p className="mb-3 text-sm text-muted-foreground line-clamp-2">{cmd.description}</p>
                   <div className="mb-3 flex flex-wrap gap-1">
                     {cmd.actions.slice(0, 3).map((action, i) => (
                       <span
                         key={i}
-                        className="rounded-full bg-sidebar-bg px-2 py-0.5 text-xs text-muted"
+                        className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground"
                       >
                         {action.action_type}
                       </span>
                     ))}
                     {cmd.actions.length > 3 && (
-                      <span className="rounded-full bg-sidebar-bg px-2 py-0.5 text-xs text-muted">
+                      <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                         +{cmd.actions.length - 3} more
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center justify-between text-xs text-muted">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>Used {cmd.use_count} times</span>
                     <div className="flex gap-2">
                       <button
@@ -295,7 +294,7 @@ export default function CommandsPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(cmd.id)}
-                        className="hover:text-danger"
+                        className="hover:text-negative"
                       >
                         Delete
                       </button>
@@ -310,18 +309,18 @@ export default function CommandsPage() {
             {templates.map((template) => (
               <div
                 key={template.id}
-                className="rounded-xl border border-border bg-card p-4"
+                className="rounded-df border border-border bg-card p-4"
               >
                 <div className="mb-3">
-                  <h3 className="font-medium text-foreground">{template.name}</h3>
+                  <h3 className="font-normal text-foreground">{template.name}</h3>
                   <p className="text-sm text-primary">&quot;{template.trigger_phrase}&quot;</p>
                 </div>
-                <p className="mb-3 text-sm text-muted">{template.description}</p>
+                <p className="mb-3 text-sm text-muted-foreground">{template.description}</p>
                 <div className="mb-3 flex flex-wrap gap-1">
                   {template.actions.map((action, i) => (
                     <span
                       key={i}
-                      className="rounded-full bg-sidebar-bg px-2 py-0.5 text-xs text-muted"
+                      className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground"
                     >
                       {action.description || action.action_type}
                     </span>
@@ -329,7 +328,7 @@ export default function CommandsPage() {
                 </div>
                 <button
                   onClick={() => handleUseTemplate(template)}
-                  className="w-full rounded-lg border border-primary px-3 py-2 text-sm font-medium text-primary hover:bg-primary hover:text-background"
+                  className="ui-button ui-button-primary w-full rounded-df border border-transparent bg-primary px-3 py-2 text-sm font-normal text-primary-foreground hover:bg-primary-hover"
                 >
                   Use This Template
                 </button>
@@ -400,13 +399,13 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-card p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-df bg-card p-6">
         <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-foreground">
+          <h2 className="text-xl font-normal text-foreground">
             {command.name ? "Edit Command" : "New Command"}
           </h2>
-          <button onClick={onClose} className="text-muted hover:text-foreground">
+          <button onClick={onClose} className="ui-button ui-button-ghost text-muted-foreground hover:text-foreground">
             <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -415,48 +414,51 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
 
         <div className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-foreground">Name</label>
+            <label htmlFor="command-name" className="mb-1 block text-sm font-normal text-foreground">Name</label>
             <input
+              id="command-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Morning Routine"
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              className="ui-input w-full rounded-df border border-muted-border bg-input px-3 py-2 text-sm text-foreground"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-foreground">Trigger Phrase</label>
+            <label htmlFor="command-trigger" className="mb-1 block text-sm font-normal text-foreground">Trigger Phrase</label>
             <input
+              id="command-trigger"
               type="text"
               value={triggerPhrase}
               onChange={(e) => setTriggerPhrase(e.target.value)}
               placeholder="morning routine"
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              className="ui-input w-full rounded-df border border-muted-border bg-input px-3 py-2 text-sm text-foreground"
             />
-            <p className="mt-1 text-xs text-muted">Say this phrase to trigger the command</p>
+            <p className="mt-1 text-xs text-muted-foreground">Say this phrase to trigger the command</p>
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-foreground">Description</label>
+            <label htmlFor="command-description" className="mb-1 block text-sm font-normal text-foreground">Description</label>
             <textarea
+              id="command-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Opens email, calendar, and plays morning news"
               rows={2}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              className="ui-input w-full rounded-df border border-muted-border bg-input px-3 py-2 text-sm text-foreground"
             />
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-foreground">Actions</label>
+            <p className="mb-2 block text-sm font-normal text-foreground">Actions</p>
             <div className="space-y-2">
               {actions.map((action, index) => (
                 <div
                   key={action.id}
-                  className="flex items-center gap-2 rounded-lg border border-border bg-background p-3"
+                  className="flex items-center gap-2 rounded-df border border-muted-border bg-muted p-3"
                 >
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-xs font-medium text-primary">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-primary/20 text-xs font-normal text-primary">
                     {index + 1}
                   </span>
                   <div className="flex-1">
@@ -467,7 +469,7 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
                       }
                       size="xsmall"
                     >
-                      <Select.Trigger className="w-full rounded bg-background">
+                      <Select.Trigger className="w-full rounded-df bg-background">
                         <Select.Value />
                       </Select.Trigger>
                       <Select.Content>
@@ -484,23 +486,25 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
                       onChange={(e) => {
                         try {
                           updateAction(action.id, { payload: JSON.parse(e.target.value) });
-                        } catch {}
+                        } catch {
+                          // Keep the last valid payload while the user edits JSON.
+                        }
                       }}
                       placeholder='{"app": "chrome"}'
-                      className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs"
+                      className="ui-input mt-1 w-full rounded-df border border-muted-border bg-input px-2 py-1 text-xs"
                     />
                   </div>
                   <input
                     type="number"
                     value={action.delay_ms}
                     onChange={(e) => updateAction(action.id, { delay_ms: parseInt(e.target.value) || 0 })}
-                    className="w-20 rounded border border-border bg-background px-2 py-1 text-xs"
+                    className="ui-input w-20 rounded-df border border-muted-border bg-input px-2 py-1 text-xs"
                     placeholder="Delay"
                   />
-                  <span className="text-xs text-muted">ms</span>
+                  <span className="text-xs text-muted-foreground">ms</span>
                   <button
                     onClick={() => removeAction(action.id)}
-                    className="text-danger hover:opacity-80"
+                    className="text-negative hover:text-foreground"
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -515,7 +519,7 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
                 <button
                   key={type.id}
                   onClick={() => addAction(type.id)}
-                  className="rounded-lg border border-border px-2 py-1 text-xs text-muted hover:border-primary hover:text-primary"
+                  className="ui-button ui-button-outline rounded-df border border-muted-border bg-muted px-2 py-1 text-xs text-foreground hover:bg-accent"
                 >
                   {type.icon} Add {type.name}
                 </button>
@@ -527,13 +531,13 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
         <div className="mt-6 flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-sidebar-hover"
+            className="ui-button ui-button-outline rounded-df border border-muted-border bg-muted px-4 py-2 text-sm font-normal text-foreground hover:bg-accent"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
+            className="ui-button ui-button-primary rounded-df bg-primary px-4 py-2 text-sm font-normal text-primary-foreground hover:bg-primary-hover"
           >
             Save Command
           </button>

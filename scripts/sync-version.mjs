@@ -9,7 +9,6 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 
 const packageJsonPath = path.join(root, "package.json");
-const tauriConfigPath = path.join(root, "backend", "tauri.conf.json");
 const cargoTomlPath = path.join(root, "backend", "Cargo.toml");
 
 const semverRegex = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -42,15 +41,6 @@ async function run() {
 
   if (!semverRegex.test(version)) {
     throw new Error(`package.json version is not semver: ${version}`);
-  }
-
-  const tauriConfig = JSON.parse(await fs.readFile(tauriConfigPath, "utf8"));
-  if (tauriConfig.version !== version) {
-    tauriConfig.version = version;
-    await fs.writeFile(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`, "utf8");
-    console.log(`Synced backend/tauri.conf.json -> ${version}`);
-  } else {
-    console.log("backend/tauri.conf.json already in sync");
   }
 
   const cargoToml = await fs.readFile(cargoTomlPath, "utf8");

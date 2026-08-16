@@ -1,5 +1,22 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+export type UnlistenFn = () => void;
+
+function desktopBridge(): NonNullable<Window["listenOS"]> {
+  if (typeof window === "undefined" || !window.listenOS) {
+    throw new Error("ListenOS desktop bridge is unavailable");
+  }
+  return window.listenOS;
+}
+
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  return desktopBridge().invoke<T>(command, args);
+}
+
+export async function listenDesktopEvent<T>(
+  eventName: string,
+  callback: (event: { payload: T }) => void,
+): Promise<UnlistenFn> {
+  return desktopBridge().on<T>(eventName, (payload) => callback({ payload }));
+}
 
 // ============ Types ============
 
@@ -213,7 +230,7 @@ export async function setLanguagePreferences(
   targetLanguage: string,
 ): Promise<LanguagePreferences> {
   return invoke("set_language_preferences", {
-    // Tauri command args in this app use camelCase in the invoke payload.
+    // Keep both spellings while older native builds are still in circulation.
     sourceLanguage,
     targetLanguage,
     // Keep snake_case aliases for compatibility across bridge behavior.
@@ -309,19 +326,19 @@ export async function showDashboard(): Promise<void> {
 // ============ Event Listeners ============
 
 export function onShortcutPressed(callback: () => void): Promise<UnlistenFn> {
-  return listen("shortcut-pressed", () => {
+  return listenDesktopEvent("shortcut-pressed", () => {
     callback();
   });
 }
 
 export function onShortcutReleased(callback: () => void): Promise<UnlistenFn> {
-  return listen("shortcut-released", () => {
+  return listenDesktopEvent("shortcut-released", () => {
     callback();
   });
 }
 
 export function onAssistantShortcut(callback: () => void): Promise<UnlistenFn> {
-  return listen("assistant-shortcut", () => {
+  return listenDesktopEvent("assistant-shortcut", () => {
     callback();
   });
 }
@@ -531,6 +548,6 @@ export async function learnCorrection(correctedText: string): Promise<string[]> 
 
 // ============ Utility ============
 
-export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export function isElectron(): boolean {
+  return typeof window !== "undefined" && Boolean(window.listenOS);
 }

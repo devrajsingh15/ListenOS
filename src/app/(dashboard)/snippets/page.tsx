@@ -1,15 +1,13 @@
-"use client";
-
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import {
-  isTauri,
+  isElectron,
   getSnippets,
   createSnippet,
   updateSnippet,
   deleteSnippet,
   type Snippet,
-} from "@/lib/tauri";
+} from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 import { Add01Icon, Search01Icon, Cancel01Icon, ArrowRight01Icon, Delete02Icon, Edit02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -36,7 +34,7 @@ export default function SnippetsPage() {
   const [expansion, setExpansion] = useState("");
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       loadSnippets();
     } else {
       setIsLoading(false);
@@ -133,10 +131,10 @@ export default function SnippetsPage() {
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-foreground">Snippets</h1>
+          <h1 className="text-2xl font-normal text-foreground">Snippets</h1>
           <button 
             onClick={() => openEditor()}
-            className="flex items-center gap-2 rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
+            className="ui-button ui-button-primary flex items-center gap-2 rounded-df bg-primary px-4 py-2.5 text-sm font-normal text-primary-foreground transition-colors hover:bg-primary-hover"
           >
             <HugeiconsIcon icon={Add01Icon} size={16} />
             Add new
@@ -151,10 +149,10 @@ export default function SnippetsPage() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  "border-b-2 pb-3 text-sm font-medium transition-colors",
+                  "border-b-2 pb-3 text-sm font-normal transition-colors",
                   activeTab === tab.id
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted hover:text-foreground"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
                 )}
               >
                 {tab.label}
@@ -166,14 +164,14 @@ export default function SnippetsPage() {
               <HugeiconsIcon 
                 icon={Search01Icon} 
                 size={16} 
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" 
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
               />
               <input
                 type="text"
                 placeholder="Search..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-40 rounded-lg border border-border bg-card py-1.5 pl-9 pr-3 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
+                className="ui-input w-40 rounded-df border border-muted-border bg-input py-1.5 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground"
               />
             </div>
           </div>
@@ -181,20 +179,20 @@ export default function SnippetsPage() {
 
         {/* Feature Tip */}
         {showTip && snippets.length === 0 && (
-          <div className="relative rounded-xl bg-card-feature p-6">
+          <div className="relative rounded-df bg-muted p-6">
             <button
               onClick={() => setShowTip(false)}
-              className="absolute right-4 top-4 rounded-lg p-1 text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+              className="absolute right-4 top-4 rounded-df p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <HugeiconsIcon icon={Cancel01Icon} size={18} />
             </button>
-            <h2 className="mb-2 text-xl font-semibold text-foreground">
+            <h2 className="mb-2 text-xl font-normal text-foreground">
               The stuff you shouldn&apos;t have to re-type.
             </h2>
-            <p className="mb-4 text-sm text-muted">
+            <p className="mb-4 text-sm text-muted-foreground">
               Save shortcuts to speak the things you type all the time—emails, links, addresses,
               bios—anything.{" "}
-              <span className="font-medium text-foreground">
+              <span className="font-normal text-foreground">
                 Just speak and ListenOS expands them instantly
               </span>
               , without retyping or hunting through old messages.
@@ -202,11 +200,11 @@ export default function SnippetsPage() {
             <div className="mb-4 space-y-2">
               {exampleSnippets.map((snippet) => (
                 <div key={snippet.trigger} className="flex items-center gap-3">
-                  <span className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground">
+                  <span className="rounded-df border border-border bg-card px-3 py-1.5 text-sm text-foreground">
                     {snippet.trigger}
                   </span>
-                  <HugeiconsIcon icon={ArrowRight01Icon} size={16} className="text-muted" />
-                  <span className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-sm text-foreground">
+                  <HugeiconsIcon icon={ArrowRight01Icon} size={16} className="text-muted-foreground" />
+                  <span className="rounded-df border border-primary/20 bg-primary/5 px-3 py-1.5 text-sm text-foreground">
                     {snippet.expansion}
                   </span>
                 </div>
@@ -214,7 +212,7 @@ export default function SnippetsPage() {
             </div>
             <button 
               onClick={() => openEditor()}
-              className="rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
+              className="ui-button ui-button-primary rounded-df bg-primary px-4 py-2.5 text-sm font-normal text-primary-foreground transition-colors hover:bg-primary-hover"
             >
               Add new snippet
             </button>
@@ -224,41 +222,41 @@ export default function SnippetsPage() {
         {/* Snippet List */}
         {isLoading ? (
           <div className="flex h-64 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="h-8 w-8 animate-spin rounded-lg border-2 border-primary border-t-transparent" />
           </div>
         ) : filteredSnippets.length === 0 ? (
           <div className="py-12 text-center">
-            <p className="text-muted">
+            <p className="text-muted-foreground">
               {searchQuery ? "No snippets match your search" : "No snippets yet. Create your first snippet!"}
             </p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="overflow-hidden rounded-df border border-border bg-card">
             {filteredSnippets.map((snippet, index) => (
               <div
                 key={snippet.id}
                 className={cn(
-                  "group flex items-center gap-3 px-6 py-4 transition-colors hover:bg-sidebar-hover",
+                  "group flex items-center gap-3 px-6 py-4 transition-colors hover:bg-accent",
                   index !== filteredSnippets.length - 1 && "border-b border-border"
                 )}
               >
-                <span className="text-sm font-medium text-foreground">{snippet.trigger}</span>
-                <HugeiconsIcon icon={ArrowRight01Icon} size={16} className="text-muted" />
-                <span className="flex-1 truncate text-sm text-muted">{snippet.expansion}</span>
-                <span className="text-xs text-muted">
+                <span className="text-sm font-normal text-foreground">{snippet.trigger}</span>
+                <HugeiconsIcon icon={ArrowRight01Icon} size={16} className="text-muted-foreground" />
+                <span className="flex-1 truncate text-sm text-muted-foreground">{snippet.expansion}</span>
+                <span className="text-xs text-muted-foreground">
                   {snippet.use_count > 0 && `Used ${snippet.use_count}x`}
                 </span>
                 <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                   <button
                     onClick={() => openEditor(snippet)}
-                    className="rounded-lg p-1.5 text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+                    className="rounded-df p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     title="Edit"
                   >
                     <HugeiconsIcon icon={Edit02Icon} size={14} />
                   </button>
                   <button
                     onClick={() => handleDeleteSnippet(snippet.id)}
-                    className="rounded-lg p-1.5 text-muted transition-colors hover:bg-danger-surface hover:text-danger"
+                    className="rounded-df p-1.5 text-muted-foreground transition-colors hover:bg-negative/10 hover:text-negative"
                     title="Delete"
                   >
                     <HugeiconsIcon icon={Delete02Icon} size={14} />
@@ -271,10 +269,10 @@ export default function SnippetsPage() {
 
         {/* Editor Modal */}
         {showEditor && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="w-full max-w-md rounded-xl bg-card p-6">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay">
+            <div className="w-full max-w-md rounded-df bg-card p-6">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-foreground">
+                <h2 className="text-lg font-normal text-foreground">
                   {editingSnippet ? "Edit Snippet" : "New Snippet"}
                 </h2>
                 <button 
@@ -283,7 +281,7 @@ export default function SnippetsPage() {
                     setEditingSnippet(null);
                     resetForm();
                   }}
-                  className="text-muted hover:text-foreground"
+                  className="text-muted-foreground hover:text-foreground"
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={20} />
                 </button>
@@ -291,33 +289,35 @@ export default function SnippetsPage() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-foreground">
+                  <label htmlFor="snippet-trigger" className="mb-1 block text-sm font-normal text-foreground">
                     Trigger phrase
                   </label>
                   <input
+                    id="snippet-trigger"
                     type="text"
                     value={trigger}
                     onChange={(e) => setTrigger(e.target.value)}
                     placeholder="e.g., my email"
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
+                    className="ui-input w-full rounded-df border border-muted-border bg-input px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
                   />
-                  <p className="mt-1 text-xs text-muted">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Say this phrase to trigger the snippet
                   </p>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-foreground">
+                  <label htmlFor="snippet-expansion" className="mb-1 block text-sm font-normal text-foreground">
                     Expansion
                   </label>
                   <textarea
+                    id="snippet-expansion"
                     value={expansion}
                     onChange={(e) => setExpansion(e.target.value)}
                     placeholder="e.g., example@email.com"
                     rows={3}
-                    className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
+                    className="ui-input w-full resize-none rounded-df border border-muted-border bg-input px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
                   />
-                  <p className="mt-1 text-xs text-muted">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     This text will be typed when you say the trigger
                   </p>
                 </div>
@@ -330,14 +330,14 @@ export default function SnippetsPage() {
                     setEditingSnippet(null);
                     resetForm();
                   }}
-                  className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-sidebar-hover"
+                  className="ui-button ui-button-outline rounded-df border border-muted-border bg-muted px-4 py-2 text-sm font-normal text-foreground hover:bg-accent"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={editingSnippet ? handleUpdateSnippet : handleCreateSnippet}
                   disabled={!trigger.trim() || !expansion.trim()}
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="ui-button ui-button-primary rounded-df bg-primary px-4 py-2 text-sm font-normal text-primary-foreground hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {editingSnippet ? "Save Changes" : "Create Snippet"}
                 </button>

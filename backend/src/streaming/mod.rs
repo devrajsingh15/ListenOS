@@ -73,7 +73,7 @@ pub struct AudioStreamer {
 
 /// Wrapper to hold the stream (cpal::Stream is not Send on some platforms)
 struct StreamHandle {
-    stream: cpal::Stream,
+    _stream: cpal::Stream,
 }
 
 // Safety: We ensure the stream is only accessed from the thread that created it
@@ -374,7 +374,7 @@ impl AudioStreamer {
 
         // Store stream handle to keep it alive
         if let Ok(mut handle) = stream_handle.lock() {
-            *handle = Some(StreamHandle { stream });
+            *handle = Some(StreamHandle { _stream: stream });
         }
 
         log::info!("Audio streaming started at {} Hz", config.sample_rate.0);

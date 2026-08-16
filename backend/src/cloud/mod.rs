@@ -1333,11 +1333,14 @@ mod tests {
 
     #[test]
     fn groq_prompt_includes_trimmed_terms() {
-        let prompt =
-            build_groq_prompt(&["  Tauri  ".to_string(), "Groq".to_string(), "".to_string()])
-                .expect("prompt");
+        let prompt = build_groq_prompt(&[
+            "  Electron  ".to_string(),
+            "Groq".to_string(),
+            "".to_string(),
+        ])
+        .expect("prompt");
 
-        assert!(prompt.contains("Tauri"));
+        assert!(prompt.contains("Electron"));
         assert!(prompt.contains("Groq"));
         assert!(!prompt.contains("  "));
     }

@@ -1,10 +1,8 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { GreetingCard } from "./GreetingCard";
 import { FeatureTip } from "./FeatureTip";
 import { ActivityTable } from "./ActivityTable";
-import { isTauri, getConversation, getTriggerHotkey } from "@/lib/tauri";
+import { isElectron, getConversation, getTriggerHotkey } from "@/lib/desktop";
 import { useSettings } from "@/context/SettingsContext";
 
 interface DashboardStats {
@@ -59,7 +57,7 @@ export function DashboardContent() {
   const displayHotkey = settings.hotkey || "Ctrl+Space";
   
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     
     const loadStats = async () => {
       try {
@@ -77,7 +75,7 @@ export function DashboardContent() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     getTriggerHotkey()
       .then((hotkey) => {
         if (hotkey && hotkey !== settings.hotkey) {
@@ -103,8 +101,8 @@ export function DashboardContent() {
       <section className="animate-slide-in space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted">Recent Activity</h2>
-            <p className="mt-1 text-sm text-muted">Click any row to copy dictation instantly.</p>
+            <h2 className="text-sm font-normal uppercase tracking-[0.14em] text-muted-foreground">Recent Activity</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Click any row to copy dictation instantly.</p>
           </div>
         </div>
         <ActivityTable />

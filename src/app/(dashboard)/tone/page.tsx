@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { cn } from "@/lib/utils";
@@ -35,12 +33,7 @@ const toneOptions: ToneOption[] = [
   },
 ];
 
-const messengerIcons = [
-  { name: "Messages", color: "#34C759" },
-  { name: "Messenger", color: "#0084FF" },
-  { name: "WhatsApp", color: "#25D366" },
-  { name: "Telegram", color: "#0088CC" },
-];
+const messengerIcons = ["Messages", "Messenger", "WhatsApp", "Telegram"];
 
 export default function TonePage() {
   const [activeTab, setActiveTab] = useState<TabType>("personal");
@@ -57,7 +50,7 @@ export default function TonePage() {
     <AppShell>
       <div className="space-y-6">
         {/* Header */}
-        <h1 className="text-2xl font-semibold text-foreground">Style</h1>
+        <h1 className="text-2xl font-normal text-foreground">Style</h1>
 
         {/* Tabs */}
         <div className="flex gap-6 border-b border-border">
@@ -66,10 +59,10 @@ export default function TonePage() {
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                "border-b-2 pb-3 text-sm font-medium transition-colors",
+                "border-b-2 pb-3 text-sm font-normal transition-colors",
                 activeTab === tab.id
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted hover:text-foreground"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
               )}
             >
               {tab.label}
@@ -78,23 +71,22 @@ export default function TonePage() {
         </div>
 
         {/* Messenger Info */}
-        <div className="flex items-center gap-4 rounded-xl bg-card-feature p-4">
+        <div className="flex items-center gap-4 rounded-df bg-muted p-4">
           <div className="flex -space-x-1">
-            {messengerIcons.map((icon) => (
+            {messengerIcons.map((name) => (
               <div
-                key={icon.name}
-                className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-white"
-                style={{ backgroundColor: icon.color }}
+                key={name}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border-2 border-card bg-primary"
               >
-                <span className="text-xs text-white">{icon.name[0]}</span>
+                <span className="text-xs text-primary-foreground">{name[0]}</span>
               </div>
             ))}
           </div>
           <div>
-            <p className="text-sm font-medium text-foreground">
+            <p className="text-sm font-normal text-foreground">
               This style applies in personal messengers
             </p>
-            <p className="text-sm text-muted">
+            <p className="text-sm text-muted-foreground">
               Available on desktop in English. iOS and more languages coming soon
             </p>
           </div>
@@ -107,32 +99,32 @@ export default function TonePage() {
               key={tone.id}
               onClick={() => setSelectedTone(tone.id)}
               className={cn(
-                "relative rounded-xl border-2 p-5 text-left transition-all",
+                "relative rounded-df border-2 p-5 text-left transition-all",
                 selectedTone === tone.id
                   ? "border-primary bg-card shadow-sm"
-                  : "border-border bg-card hover:border-muted"
+                  : "border-border bg-card hover:bg-accent"
               )}
             >
               <h3
                 className={cn(
-                  "mb-1 text-2xl font-semibold",
+                  "mb-1 text-2xl font-normal",
                   tone.id === "very-casual" ? "lowercase" : ""
                 )}
               >
                 {tone.label}
               </h3>
-              <p className="mb-4 text-sm text-muted">{tone.description}</p>
-              <div className="rounded-lg bg-sidebar-bg p-3">
-                <p className="text-sm text-muted">{tone.example}</p>
+              <p className="mb-4 text-sm text-muted-foreground">{tone.description}</p>
+              <div className="rounded-df bg-muted p-3">
+                <p className="text-sm text-muted-foreground">{tone.example}</p>
               </div>
               
               {/* Avatar indicator */}
               <div
                 className={cn(
-                  "absolute bottom-4 right-4 flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold",
+                  "absolute bottom-4 right-4 flex h-10 w-10 items-center justify-center rounded-lg text-sm font-normal",
                   selectedTone === tone.id
-                    ? "bg-primary text-background"
-                    : "bg-surface-elevated text-muted"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card text-muted-foreground"
                 )}
               >
                 J

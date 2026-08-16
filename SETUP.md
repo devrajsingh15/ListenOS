@@ -1,79 +1,47 @@
 # ListenOS Setup
 
-ListenOS is desktop-first and local-first.
-
-- No cloud auth/login gate
-- No external server process
-- No cloud database
-- Tauri + Next.js + Rust backend in one app
-
-## Prerequisites
-
-- Node.js 20+
-- Rust stable toolchain
-- Tauri platform toolchain
-
-Windows extras:
-- Visual Studio Build Tools with C++ workload
-
-macOS extras:
-- Xcode Command Line Tools (`xcode-select --install`)
+ListenOS packages Electron, a React renderer built with Rspack, and a Rust native backend into one desktop app. No separate server or cloud login is required.
 
 ## Install
 
+Install Node.js 20+, Rust stable, and the platform compiler toolchain, then run:
+
 ```bash
 npm install
-# or
-bun install
 ```
 
-## Configure API Key
+Windows requires Visual Studio Build Tools with C++. macOS requires Xcode Command Line Tools. Linux requires ALSA development headers.
 
-Primary path (recommended):
-- Open app
-- Go to `Settings -> System`
-- Set `Groq API key`
+## Configure
 
-Optional env path:
-Copy `.env.example` to `.env.local` and set:
+Set the Groq key in `Settings -> System`, or copy `.env.example` to `.env.local`:
 
 ```env
 GROQ_API_KEY=your_groq_api_key
 LISTENOS_REQUIRE_CONFIRMATION=false
 ```
 
-## Run Development
+## Develop
 
 ```bash
-npm run tauri:dev
-# or
-bun run tauri:dev
+npm run desktop:dev
 ```
 
-## Build
+This starts Rspack, Electron, and the Rust backend. Rust changes are rebuilt when the desktop app restarts.
+
+## Package
 
 ```bash
-npm run tauri:build
-# or
-bun run tauri:build
+npm run desktop:build:windows
+npm run desktop:build:mac
+npm run desktop:build:linux
 ```
 
-Platform bundles:
-
-- Windows NSIS: `npm run tauri:build:windows:nsis`
-- macOS DMG: `npm run tauri:build:mac:dmg`
-- Linux AppImage: `npm run tauri:build:linux:appimage`
+Outputs are placed in `dist/electron/`.
 
 ## Default Shortcuts
 
 - Hold-to-talk: `Ctrl+Space`
-- Assistant mode (idle/handsfree toggle): `Ctrl+Alt+Space`
+- Assistant mode: `Ctrl+Alt+Space`
 
 Both are configurable in `Settings -> General`.
-
-## Notes
-
-- First launch shows onboarding to configure key/microphone baseline.
-- Theme follows device preference automatically.
-- Settings and key storage are local to device.
-- Voice processing and action execution run through desktop runtime.

@@ -8,9 +8,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 
-const tauriConfigPath = path.join(root, "backend", "tauri.conf.json");
+const packageJsonPath = path.join(root, "package.json");
 const endpointArg = process.argv[2]?.trim();
-const endpoint = endpointArg || process.env.TAURI_UPDATER_ENDPOINT?.trim();
+const endpoint = endpointArg || process.env.ELECTRON_UPDATER_URL?.trim();
 
 if (!endpoint) {
   console.error("Missing updater endpoint. Usage: node scripts/set-updater-endpoint.mjs <https-url>");
@@ -31,13 +31,14 @@ if (parsedUrl.protocol !== "https:") {
 }
 
 async function run() {
-  const tauriConfig = JSON.parse(await fs.readFile(tauriConfigPath, "utf8"));
-  if (!tauriConfig.plugins || !tauriConfig.plugins.updater) {
-    throw new Error("backend/tauri.conf.json does not contain plugins.updater");
+  const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
+  if (!Array.isArray(packageJson.build?.publish) || !packageJson.build.publish[0]) {
+    throw new Error("package.json does not contain build.publish[0]");
   }
 
-  tauriConfig.plugins.updater.endpoints = [endpoint];
-  await fs.writeFile(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`, "utf8");
+  const updaterUrl = endpoint.replace(/\/$/, "");
+  packageJson.build.publish[0].url = updaterUrl;
+  await fs.writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
   console.log(`Set updater endpoint to ${endpoint}`);
 }
 

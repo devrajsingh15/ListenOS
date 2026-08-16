@@ -1,11 +1,9 @@
-"use client";
-
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Select from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
-  isTauri,
+  isElectron,
   getAssistantHotkey,
   getAutostartEnabled,
   setAutostartEnabled,
@@ -18,8 +16,8 @@ import {
   setVibeCodingConfig,
   getLocalApiSettings,
   setLocalApiSettings,
-} from "@/lib/tauri";
-import type { VibeCodingConfig } from "@/lib/tauri";
+} from "@/lib/desktop";
+import type { VibeCodingConfig } from "@/lib/desktop";
 import { checkForUpdates } from "@/lib/updater";
 import { useSettings } from "@/context/SettingsContext";
 import packageInfo from "../../../package.json";
@@ -168,7 +166,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm"
+            className="fixed inset-0 z-50 bg-overlay backdrop-blur-sm"
           />
 
           {/* Modal */}
@@ -177,13 +175,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className="fixed left-1/2 top-1/2 z-50 flex h-[600px] w-[800px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl bg-card shadow-modal"
+            className="fixed left-1/2 top-1/2 z-50 flex h-[600px] w-[800px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-df bg-card shadow-2xl"
           >
             {/* Settings Sidebar */}
-            <div className="flex w-56 flex-col border-r border-border bg-sidebar-bg p-4">
+            <div className="flex w-56 flex-col border-r border-muted-border bg-muted p-4">
               {/* Settings Section */}
               <div className="mb-4">
-                <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
+                <h3 className="mb-2 px-3 text-xs font-normal uppercase tracking-wider text-muted-foreground">
                   Settings
                 </h3>
                 <ul className="space-y-1">
@@ -192,10 +190,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       <button
                         onClick={() => setActiveSection(item.id)}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                          "flex w-full items-center gap-3 rounded-df px-3 py-2 text-sm font-normal transition-colors",
                           activeSection === item.id
-                            ? "bg-sidebar-active text-foreground"
-                            : "text-muted hover:bg-sidebar-hover hover:text-foreground"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
                         )}
                       >
                         <HugeiconsIcon icon={item.icon} size={18} />
@@ -208,7 +206,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
               {/* Account Section */}
               <div>
-                <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
+                <h3 className="mb-2 px-3 text-xs font-normal uppercase tracking-wider text-muted-foreground">
                   Account
                 </h3>
                 <ul className="space-y-1">
@@ -217,10 +215,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       <button
                         onClick={() => setActiveSection(item.id)}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                          "flex w-full items-center gap-3 rounded-df px-3 py-2 text-sm font-normal transition-colors",
                           activeSection === item.id
-                            ? "bg-sidebar-active text-foreground"
-                            : "text-muted hover:bg-sidebar-hover hover:text-foreground"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
                         )}
                       >
                         <HugeiconsIcon icon={item.icon} size={18} />
@@ -242,7 +240,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               {/* Close Button */}
               <button
                 onClick={onClose}
-                className="absolute right-4 top-4 rounded-lg p-2 text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+                className="ui-button ui-button-ghost absolute right-4 top-4 rounded-df p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <HugeiconsIcon icon={Cancel01Icon} size={20} />
               </button>
@@ -282,7 +280,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
 
   // Load actual autostart state on mount
   useEffect(() => {
-    if (isTauri()) {
+    if (isElectron()) {
       getAutostartEnabled()
         .then((enabled) => setStartOnLogin(enabled))
         .catch((err) => console.error("Failed to get autostart status:", err));
@@ -327,7 +325,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   // Update local state when settings change
   useEffect(() => {
     setShowInTray(settings.showInTray);
-    if (!isTauri()) {
+    if (!isElectron()) {
       setTargetLanguage(settings.language);
     }
     if (settings.hotkey) {
@@ -339,7 +337,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   }, [settings]);
 
   const handleCheckUpdates = useCallback(async () => {
-    if (!isTauri()) {
+    if (!isElectron()) {
       setUpdateStatus("Updates only available in desktop app");
       return;
     }
@@ -359,7 +357,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   }, []);
 
   const handleStartOnLoginChange = useCallback(async (checked: boolean) => {
-    if (!isTauri()) {
+    if (!isElectron()) {
       setStartOnLogin(checked);
       await updateSettings({ startOnLogin: checked });
       return;
@@ -385,7 +383,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   }, [updateSettings]);
 
   const handleGroqApiKeySave = useCallback(async () => {
-    if (!isTauri()) {
+    if (!isElectron()) {
       return;
     }
 
@@ -407,7 +405,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     const previousTarget = targetLanguage;
     setSourceLanguage(newLanguage);
 
-    if (isTauri()) {
+    if (isElectron()) {
       try {
         const updated = await setLanguagePreferences(newLanguage, targetLanguage);
         setSourceLanguage(updated.source_language);
@@ -427,7 +425,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     const previousTarget = targetLanguage;
     setTargetLanguage(newLanguage);
 
-    if (isTauri()) {
+    if (isElectron()) {
       try {
         const updated = await setLanguagePreferences(sourceLanguage, newLanguage);
         setSourceLanguage(updated.source_language);
@@ -459,7 +457,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
 
     setVibeConfigState(next);
 
-    if (!isTauri()) {
+    if (!isElectron()) {
       return;
     }
 
@@ -477,7 +475,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   }, [vibeConfig]);
 
   const applyShortcut = useCallback(async (target: ShortcutTarget, rawShortcut: string) => {
-    if (isTauri()) {
+    if (isElectron()) {
       if (target === "assistant") {
         const normalized = await setAssistantHotkey(rawShortcut);
         setCurrentAssistantShortcut(normalized);
@@ -554,7 +552,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     case "general":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">General</h2>
+          <h2 className="mb-6 text-2xl font-normal text-foreground">General</h2>
           <div className="space-y-6">
             <SettingsRow
               label="Hold-to-talk shortcut"
@@ -567,10 +565,10 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                 <button 
                   onClick={() => handleShortcutRecord("pushToTalk")}
                   className={cn(
-                    "rounded-lg border px-4 py-2 text-sm font-medium transition-colors cursor-pointer",
+                    "ui-button rounded-df border px-4 py-2 text-sm font-normal transition-colors cursor-pointer",
                     recordingShortcutTarget === "pushToTalk"
                       ? "border-primary bg-primary/10 text-primary animate-pulse" 
-                      : "border-border text-foreground hover:bg-sidebar-hover"
+                      : "border-muted-border bg-muted text-foreground hover:bg-accent"
                   )}
                 >
                   {recordingShortcutTarget === "pushToTalk" ? "Recording..." : "Change"}
@@ -588,10 +586,10 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                 <button
                   onClick={() => handleShortcutRecord("assistant")}
                   className={cn(
-                    "rounded-lg border px-4 py-2 text-sm font-medium transition-colors cursor-pointer",
+                    "ui-button rounded-df border px-4 py-2 text-sm font-normal transition-colors cursor-pointer",
                     recordingShortcutTarget === "assistant"
                       ? "border-primary bg-primary/10 text-primary animate-pulse"
-                      : "border-border text-foreground hover:bg-sidebar-hover"
+                      : "border-muted-border bg-muted text-foreground hover:bg-accent"
                   )}
                 >
                   {recordingShortcutTarget === "assistant" ? "Recording..." : "Change"}
@@ -602,7 +600,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               label="Microphone"
               description="Auto-detect (Default)"
               action={
-                <button className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover">
+                <button className="ui-button ui-button-outline rounded-df border border-muted-border bg-muted px-4 py-2 text-sm font-normal text-foreground transition-colors hover:bg-accent">
                   Change
                 </button>
               }
@@ -640,7 +638,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                 <button 
                   onClick={handleCheckUpdates}
                   disabled={isCheckingUpdates}
-                  className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                  className="ui-button ui-button-outline flex items-center gap-2 rounded-df border border-muted-border bg-muted px-4 py-2 text-sm font-normal text-foreground transition-colors hover:bg-accent"
                 >
                   <HugeiconsIcon 
                     icon={isCheckingUpdates ? Loading03Icon : Download04Icon} 
@@ -657,7 +655,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     case "system":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">System</h2>
+          <h2 className="mb-6 text-2xl font-normal text-foreground">System</h2>
           <div className="space-y-6">
             <SettingsRow
               label="Start on login"
@@ -691,12 +689,12 @@ function SettingsContent({ section }: { section: SettingsSection }) {
                     onChange={(e) => setGroqApiKey(e.target.value)}
                     disabled={apiSettingsLoading || apiSettingsSaving}
                     placeholder="gsk_..."
-                    className="w-56 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors disabled:opacity-50"
+                    className="ui-input w-56 rounded-df border border-muted-border bg-input px-3 py-2 text-sm font-normal text-foreground transition-colors"
                   />
                   <button
                     onClick={() => void handleGroqApiKeySave()}
                     disabled={apiSettingsLoading || apiSettingsSaving}
-                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                    className="ui-button ui-button-outline rounded-df border border-muted-border bg-muted px-4 py-2 text-sm font-normal text-foreground transition-colors hover:bg-accent"
                   >
                     {apiSettingsSaving ? "Saving..." : "Save"}
                   </button>
@@ -709,8 +707,8 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     case "vibe-coding":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">Vibe coding</h2>
-          <p className="mb-4 text-muted">
+          <h2 className="mb-6 text-2xl font-normal text-foreground">Vibe coding</h2>
+          <p className="mb-4 text-muted-foreground">
             Turn rough spoken coding ideas into clean, structured prompts before they are pasted.
           </p>
           <div className="space-y-6">
@@ -744,14 +742,14 @@ function SettingsContent({ section }: { section: SettingsSection }) {
             />
             <SettingsRow
               label="Trigger phrase"
-              description={`Say this first in manual mode. Example: "${vibeConfig.trigger_phrase} build a Tauri command..."`}
+              description={`Say this first in manual mode. Example: "${vibeConfig.trigger_phrase} build an Electron IPC command..."`}
               action={
                 <input
                   value={vibeConfig.trigger_phrase}
                   onChange={(e) => setVibeConfigState((prev) => ({ ...prev, trigger_phrase: e.target.value }))}
                   onBlur={(e) => void applyVibeConfig({ trigger_phrase: e.target.value })}
                   disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
-                  className="w-44 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors disabled:opacity-50"
+                  className="ui-input w-44 rounded-df border border-muted-border bg-input px-3 py-2 text-sm font-normal text-foreground transition-colors"
                   placeholder="vibe"
                 />
               }
@@ -833,14 +831,14 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               }
             />
 
-            <div className="rounded-lg border border-border bg-sidebar-bg p-4">
-              <p className="mb-1 text-sm font-medium text-foreground">Live behavior</p>
-              <p className="text-sm text-muted">
+            <div className="rounded-df border border-muted-border bg-muted p-4">
+              <p className="mb-1 text-sm font-normal text-foreground">Live behavior</p>
+              <p className="text-sm text-muted-foreground">
                 Spoken coding requests are rewritten before paste. Commands like opening apps or taking screenshots
                 still execute normally and skip vibe rewriting.
               </p>
               {(vibeSaving || vibeLoading) && (
-                <p className="mt-2 text-xs text-muted">Syncing settings...</p>
+                <p className="mt-2 text-xs text-muted-foreground">Syncing settings...</p>
               )}
             </div>
           </div>
@@ -849,27 +847,27 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     case "experimental":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">Experimental</h2>
-          <p className="text-muted mb-4">Try out new features before they&apos;re released.</p>
-          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
-            <p className="text-sm text-muted">No experimental features available at this time.</p>
+          <h2 className="mb-6 text-2xl font-normal text-foreground">Experimental</h2>
+          <p className="text-muted-foreground mb-4">Try out new features before they&apos;re released.</p>
+          <div className="rounded-df border border-muted-border bg-muted p-4">
+            <p className="text-sm text-muted-foreground">No experimental features available at this time.</p>
           </div>
         </div>
       );
     case "account":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">Account</h2>
+          <h2 className="mb-6 text-2xl font-normal text-foreground">Account</h2>
           <div className="space-y-6">
             <SettingsRow
               label="Mode"
               description="Self-hosted local mode. No sign-in required."
-              action={<span className="text-sm text-success-text">Local only</span>}
+              action={<span className="text-sm text-positive">Local only</span>}
             />
             <SettingsRow
               label="Profile"
               description="Local user"
-              action={<span className="text-sm text-muted">Stored on this device</span>}
+              action={<span className="text-sm text-muted-foreground">Stored on this device</span>}
             />
           </div>
         </div>
@@ -877,20 +875,20 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     case "team":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">Team</h2>
-          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
-            <p className="text-sm text-muted">Team sync is disabled in self-hosted mode.</p>
+          <h2 className="mb-6 text-2xl font-normal text-foreground">Team</h2>
+          <div className="rounded-df border border-muted-border bg-muted p-4">
+            <p className="text-sm text-muted-foreground">Team sync is disabled in self-hosted mode.</p>
           </div>
         </div>
       );
     case "billing":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">Plans and Billing</h2>
-          <div className="rounded-lg border border-border bg-sidebar-bg p-4">
-            <p className="text-sm text-muted">
+          <h2 className="mb-6 text-2xl font-normal text-foreground">Plans and Billing</h2>
+          <div className="rounded-df border border-muted-border bg-muted p-4">
+            <p className="text-sm text-muted-foreground">
               ListenOS self-hosted mode has no account billing. Use your own API keys in
-              <span className="font-medium text-foreground"> System </span>
+              <span className="font-normal text-foreground"> System </span>
               settings.
             </p>
           </div>
@@ -899,18 +897,18 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     case "privacy":
       return (
         <div className="animate-fade-in">
-          <h2 className="mb-6 text-2xl font-semibold text-foreground">Data and Privacy</h2>
+          <h2 className="mb-6 text-2xl font-normal text-foreground">Data and Privacy</h2>
           <div className="space-y-6">
             <SettingsRow
               label="Voice data"
               description="Voice recordings are processed locally and not stored"
-              action={<span className="text-sm text-success-text">Secure</span>}
+              action={<span className="text-sm text-positive">Secure</span>}
             />
             <SettingsRow
               label="Command history"
               description="Clear your command history from this device"
               action={
-                <button className="rounded-lg border border-danger-border bg-danger-surface px-4 py-2 text-sm font-medium text-danger transition-colors hover:opacity-85">
+                <button className="ui-button rounded-df border border-negative/25 bg-negative/10 px-4 py-2 text-sm font-normal text-negative transition-colors hover:bg-accent">
                   Clear history
                 </button>
               }
@@ -919,7 +917,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               label="Delete local data"
               description="Clear local ListenOS data on this device"
               action={
-                <button className="rounded-lg border border-danger-border bg-danger-surface px-4 py-2 text-sm font-medium text-danger transition-colors hover:opacity-85">
+                <button className="ui-button rounded-df border border-negative/25 bg-negative/10 px-4 py-2 text-sm font-normal text-negative transition-colors hover:bg-accent">
                   Clear local data
                 </button>
               }
@@ -944,8 +942,8 @@ function SettingsRow({
   return (
     <div className="flex items-center justify-between border-b border-border pb-4">
       <div>
-        <h3 className="text-sm font-medium text-foreground">{label}</h3>
-        <p className="text-sm text-muted">{description}</p>
+        <h3 className="text-sm font-normal text-foreground">{label}</h3>
+        <p className="text-sm text-muted-foreground">{description}</p>
       </div>
       {action}
     </div>
@@ -1000,15 +998,16 @@ function ToggleSwitch({
     <button
       onClick={() => !disabled && onChange(!checked)}
       disabled={disabled}
+      aria-pressed={checked}
       className={cn(
-        "relative h-6 w-11 rounded-full transition-colors",
-        checked ? "bg-primary" : "bg-border",
-        disabled && "opacity-50 cursor-not-allowed"
+        "relative h-6 w-11 rounded-lg border border-muted-border transition-colors",
+        checked ? "bg-primary" : "bg-muted",
+        disabled && "cursor-not-allowed"
       )}
     >
         <span
           className={cn(
-            "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-background shadow transition-transform",
+            "absolute left-0.5 top-0.5 h-5 w-5 rounded-lg bg-card shadow transition-transform",
             checked && "translate-x-5"
           )}
         />

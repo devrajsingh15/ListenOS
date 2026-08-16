@@ -13,10 +13,9 @@
 # testing
 /coverage
 
-# next.js
-/.next/
+# renderer output
+/.npm-cache/
 /out/
-server/.next/
 
 # server dependencies
 server/node_modules/
@@ -51,7 +50,6 @@ server/.env
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
-# Tauri signing keys (KEEP PRIVATE!)
-.tauri/
+# Electron packaging output
+/dist/

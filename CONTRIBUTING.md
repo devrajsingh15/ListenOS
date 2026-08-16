@@ -8,7 +8,7 @@ ListenOS is proprietary software. Coordinate with maintainers before starting ma
 2. Keep changes scoped to one problem/feature per PR.
 3. Run local checks before opening a PR:
    - `npm run lint`
-   - `npm run tauri:dev` (quick manual sanity check)
+   - `npm run desktop:dev` (quick manual sanity check)
 4. Open a PR with:
    - Problem statement
    - Implementation summary

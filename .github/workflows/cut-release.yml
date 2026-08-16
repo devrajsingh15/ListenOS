@@ -23,10 +23,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Bump version files
         run: npm run release:prepare -- "${{ inputs.version }}"
@@ -43,7 +39,7 @@ jobs:
             exit 1
           fi
 
-          git add package.json package-lock.json backend/tauri.conf.json backend/Cargo.toml
+          git add package.json backend/Cargo.toml
           git commit -m "chore(release): v${VERSION}"
           git tag "v${VERSION}"
           git push origin HEAD

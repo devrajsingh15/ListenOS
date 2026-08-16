@@ -1,4 +1,4 @@
-//! Tauri command handlers for Listen OS
+//! Desktop command handlers for ListenOS.
 //!
 //! Cloud-first architecture with embedded API keys.
 //! Users just speak - we handle everything.
@@ -16,9 +16,8 @@ use crate::delivery::{
     capture_surface_snapshot, strategy_chain, verify_inserted_text, DeliveryPhase,
     DeliveryStatusSnapshot, DeliveryStrategy,
 };
-use crate::AppState;
+use crate::{AppState, State};
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 /// Status response for frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -378,7 +377,7 @@ fn coding_prompt_signal_score(text: &str) -> u8 {
         "python",
         "react",
         "next",
-        "tauri",
+        "electron",
         "test",
         "unit test",
         "integration test",
@@ -486,7 +485,6 @@ async fn enhance_vibe_coding_prompt(
 // ============ Core Voice Commands ============
 
 /// Start listening for voice input
-#[tauri::command]
 pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String> {
     let mut is_listening = state.is_listening.lock().await;
 
@@ -545,7 +543,6 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
 }
 
 /// Stop listening and process audio
-#[tauri::command]
 pub async fn stop_listening(
     state: State<'_, AppState>,
     dictation_only: Option<bool>,
@@ -1195,7 +1192,6 @@ pub async fn stop_listening(
 }
 
 /// Get current application status
-#[tauri::command]
 pub async fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, String> {
     let is_listening = *state.is_listening.lock().await;
     let is_processing = *state.is_processing.lock().await;
@@ -1220,7 +1216,6 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, St
 }
 
 /// Get a pending action waiting for user confirmation.
-#[tauri::command]
 pub async fn get_pending_action(
     state: State<'_, AppState>,
 ) -> Result<Option<PendingActionResponse>, String> {
@@ -1236,7 +1231,6 @@ pub async fn get_pending_action(
 }
 
 /// Confirm and execute the pending action.
-#[tauri::command]
 pub async fn confirm_pending_action(state: State<'_, AppState>) -> Result<CommandResult, String> {
     let pending = {
         let pending_guard = state.pending_action.lock().await;
@@ -1268,7 +1262,6 @@ pub async fn confirm_pending_action(state: State<'_, AppState>) -> Result<Comman
 }
 
 /// Cancel the pending action without executing it.
-#[tauri::command]
 pub async fn cancel_pending_action(state: State<'_, AppState>) -> Result<bool, String> {
     let mut pending = state.pending_action.lock().await;
     let had_pending = pending.is_some();
@@ -1277,7 +1270,6 @@ pub async fn cancel_pending_action(state: State<'_, AppState>) -> Result<bool, S
 }
 
 /// Get real-time audio level (0.0 to 1.0) for visualization
-#[tauri::command]
 pub async fn get_audio_level(state: State<'_, AppState>) -> Result<f32, String> {
     let is_listening = *state.is_listening.lock().await;
     if !is_listening {
@@ -1291,7 +1283,6 @@ pub async fn get_audio_level(state: State<'_, AppState>) -> Result<f32, String> 
 // ============ Audio Device Commands ============
 
 /// Get list of available audio input devices
-#[tauri::command]
 pub async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
     crate::audio::AudioState::get_devices()
 }
@@ -1306,7 +1297,6 @@ fn is_handsfree_input_name(name: &str) -> bool {
 }
 
 /// Set the audio input device
-#[tauri::command]
 pub async fn set_audio_device(
     state: State<'_, AppState>,
     device_name: String,
@@ -2645,13 +2635,11 @@ async fn type_text_internal(
 }
 
 /// Type text into the active window
-#[tauri::command]
 pub async fn type_text(state: State<'_, AppState>, text: String) -> Result<CommandResult, String> {
     type_text_internal(Some(&state), text).await
 }
 
 /// Run a system command
-#[tauri::command]
 pub async fn run_system_command(command: String) -> Result<CommandResult, String> {
     use std::process::Command;
 
@@ -3299,7 +3287,6 @@ async fn execute_custom_command(
 // ============ Conversation Commands ============
 
 /// Get conversation history
-#[tauri::command]
 pub async fn get_conversation(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::conversation::Message>, String> {
@@ -3308,7 +3295,6 @@ pub async fn get_conversation(
 }
 
 /// Clear conversation history
-#[tauri::command]
 pub async fn clear_conversation(state: State<'_, AppState>) -> Result<(), String> {
     let mut conversation = state.conversation.lock().await;
     conversation.clear();
@@ -3316,7 +3302,6 @@ pub async fn clear_conversation(state: State<'_, AppState>) -> Result<(), String
 }
 
 /// Start a new conversation session
-#[tauri::command]
 pub async fn new_conversation_session(state: State<'_, AppState>) -> Result<String, String> {
     let mut conversation = state.conversation.lock().await;
 
@@ -3335,21 +3320,18 @@ pub async fn new_conversation_session(state: State<'_, AppState>) -> Result<Stri
 // ============ Clipboard Commands ============
 
 /// Get clipboard content
-#[tauri::command]
 pub async fn get_clipboard(state: State<'_, AppState>) -> Result<String, String> {
     let clipboard = state.clipboard.lock().await;
     clipboard.get_current()
 }
 
 /// Set clipboard content
-#[tauri::command]
 pub async fn set_clipboard(state: State<'_, AppState>, content: String) -> Result<(), String> {
     let clipboard = state.clipboard.lock().await;
     clipboard.set_content(content)
 }
 
 /// Get clipboard history
-#[tauri::command]
 pub async fn get_clipboard_history(
     state: State<'_, AppState>,
     limit: Option<usize>,
@@ -3361,7 +3343,6 @@ pub async fn get_clipboard_history(
 // ============ Integration Commands ============
 
 /// Get list of available integrations
-#[tauri::command]
 pub async fn get_integrations(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::integrations::IntegrationInfo>, String> {
@@ -3370,7 +3351,6 @@ pub async fn get_integrations(
 }
 
 /// Enable or disable an integration
-#[tauri::command]
 pub async fn set_integration_enabled(
     state: State<'_, AppState>,
     name: String,
@@ -3383,7 +3363,6 @@ pub async fn set_integration_enabled(
 // ============ Context Commands ============
 
 /// Set voice mode (dictation or command)
-#[tauri::command]
 pub async fn set_voice_context(
     state: State<'_, AppState>,
     active_app: Option<String>,
@@ -3404,7 +3383,6 @@ pub async fn set_voice_context(
 }
 
 /// Get current voice context
-#[tauri::command]
 pub async fn get_voice_context(state: State<'_, AppState>) -> Result<VoiceContext, String> {
     let context = state.current_context.lock().await;
     Ok(context.clone())
@@ -3412,7 +3390,6 @@ pub async fn get_voice_context(state: State<'_, AppState>) -> Result<VoiceContex
 
 // ============ Configuration Commands ============
 
-#[tauri::command]
 pub async fn get_config(state: State<'_, AppState>) -> Result<crate::config::AppConfig, String> {
     let config = state.config.lock().await;
     Ok(config.clone())
@@ -3483,47 +3460,8 @@ fn validate_distinct_hotkeys(trigger_hotkey: &str, assistant_hotkey: &str) -> Re
     Ok(())
 }
 
-pub(crate) fn apply_global_hotkeys(
-    app: &tauri::AppHandle,
-    trigger_hotkey: &str,
-    assistant_hotkey: &str,
-) -> Result<(), String> {
-    use std::str::FromStr;
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-
-    let normalized_trigger = normalize_hotkey_string(trigger_hotkey)?;
-    let normalized_assistant = normalize_hotkey_string(assistant_hotkey)?;
-    validate_distinct_hotkeys(&normalized_trigger, &normalized_assistant)?;
-
-    let parsed_trigger = Shortcut::from_str(&normalized_trigger)
-        .map_err(|_| format!("Invalid hotkey format: '{}'", normalized_trigger))?;
-    let parsed_assistant = Shortcut::from_str(&normalized_assistant)
-        .map_err(|_| format!("Invalid hotkey format: '{}'", normalized_assistant))?;
-
-    app.global_shortcut()
-        .unregister_all()
-        .map_err(|e| format!("Failed to unregister previous shortcuts: {}", e))?;
-
-    app.global_shortcut()
-        .register(parsed_trigger)
-        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized_trigger, e))?;
-
-    app.global_shortcut()
-        .register(parsed_assistant)
-        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized_assistant, e))?;
-
-    log::info!(
-        "Registered global hotkeys: hold='{}', assistant='{}'",
-        normalized_trigger,
-        normalized_assistant
-    );
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn set_config(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, crate::AppState>,
+    state: State<'_, crate::AppState>,
     config: crate::config::AppConfig,
 ) -> Result<bool, String> {
     let mut config = config;
@@ -3547,7 +3485,7 @@ pub async fn set_config(
             new_trigger,
             new_assistant
         );
-        apply_global_hotkeys(&app, &new_trigger, &new_assistant)?;
+        validate_distinct_hotkeys(&new_trigger, &new_assistant)?;
     }
 
     *current_config = config;
@@ -3560,15 +3498,12 @@ pub async fn set_config(
     Ok(true)
 }
 
-#[tauri::command]
 pub async fn get_trigger_hotkey(state: State<'_, AppState>) -> Result<String, String> {
     let config = state.config.lock().await;
     Ok(config.trigger_hotkey.clone())
 }
 
-#[tauri::command]
 pub async fn set_trigger_hotkey(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     hotkey: String,
 ) -> Result<String, String> {
@@ -3577,22 +3512,19 @@ pub async fn set_trigger_hotkey(
         let config = state.config.lock().await;
         config.assistant_hotkey.clone()
     };
-    apply_global_hotkeys(&app, &normalized_trigger, &assistant_hotkey)?;
+    validate_distinct_hotkeys(&normalized_trigger, &assistant_hotkey)?;
 
     let mut config = state.config.lock().await;
     config.trigger_hotkey = normalized_trigger.clone();
     Ok(normalized_trigger)
 }
 
-#[tauri::command]
 pub async fn get_assistant_hotkey(state: State<'_, AppState>) -> Result<String, String> {
     let config = state.config.lock().await;
     Ok(config.assistant_hotkey.clone())
 }
 
-#[tauri::command]
 pub async fn set_assistant_hotkey(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     hotkey: String,
 ) -> Result<String, String> {
@@ -3601,14 +3533,13 @@ pub async fn set_assistant_hotkey(
         let config = state.config.lock().await;
         config.trigger_hotkey.clone()
     };
-    apply_global_hotkeys(&app, &trigger_hotkey, &normalized_assistant)?;
+    validate_distinct_hotkeys(&trigger_hotkey, &normalized_assistant)?;
 
     let mut config = state.config.lock().await;
     config.assistant_hotkey = normalized_assistant.clone();
     Ok(normalized_assistant)
 }
 
-#[tauri::command]
 pub async fn get_language_preferences(
     state: State<'_, AppState>,
 ) -> Result<LanguagePreferences, String> {
@@ -3618,7 +3549,6 @@ pub async fn get_language_preferences(
     ))
 }
 
-#[tauri::command]
 pub async fn set_language_preferences(
     state: State<'_, AppState>,
     source_language: String,
@@ -3637,7 +3567,6 @@ pub async fn set_language_preferences(
     Ok(normalized)
 }
 
-#[tauri::command]
 pub async fn get_vibe_coding_config(
     state: State<'_, AppState>,
 ) -> Result<VibeCodingConfig, String> {
@@ -3645,7 +3574,6 @@ pub async fn get_vibe_coding_config(
     Ok(normalized_vibe_coding_config(&config.vibe_coding))
 }
 
-#[tauri::command]
 pub async fn set_vibe_coding_config(
     state: State<'_, AppState>,
     config: VibeCodingConfig,
@@ -3670,12 +3598,10 @@ fn sanitize_groq_api_key(raw: &str) -> String {
     }
 }
 
-#[tauri::command]
 pub async fn get_local_api_settings() -> Result<LocalApiSettings, String> {
     Ok(LocalApiSettings::load_from_disk().unwrap_or_default())
 }
 
-#[tauri::command]
 pub async fn set_local_api_settings(groq_api_key: String) -> Result<LocalApiSettings, String> {
     let settings = LocalApiSettings {
         groq_api_key: sanitize_groq_api_key(&groq_api_key),
@@ -3687,48 +3613,41 @@ pub async fn set_local_api_settings(groq_api_key: String) -> Result<LocalApiSett
 // ============ Custom Commands ============
 
 /// Get all custom commands
-#[tauri::command]
 pub async fn get_custom_commands() -> Result<Vec<custom::CustomCommand>, String> {
     let store = custom::CustomCommandsStore::new()?;
     store.get_all_commands()
 }
 
 /// Get built-in command templates
-#[tauri::command]
 pub async fn get_command_templates() -> Result<Vec<custom::CustomCommand>, String> {
     Ok(custom::get_builtin_templates())
 }
 
 /// Save a custom command
-#[tauri::command]
 pub async fn save_custom_command(command: custom::CustomCommand) -> Result<(), String> {
     let store = custom::CustomCommandsStore::new()?;
     store.save_command(&command)
 }
 
 /// Delete a custom command
-#[tauri::command]
 pub async fn delete_custom_command(id: String) -> Result<(), String> {
     let store = custom::CustomCommandsStore::new()?;
     store.delete_command(&id)
 }
 
 /// Enable or disable a custom command
-#[tauri::command]
 pub async fn set_custom_command_enabled(id: String, enabled: bool) -> Result<(), String> {
     let store = custom::CustomCommandsStore::new()?;
     store.set_enabled(&id, enabled)
 }
 
 /// Export all custom commands to JSON
-#[tauri::command]
 pub async fn export_custom_commands() -> Result<String, String> {
     let store = custom::CustomCommandsStore::new()?;
     store.export_commands()
 }
 
 /// Import custom commands from JSON
-#[tauri::command]
 pub async fn import_custom_commands(json: String) -> Result<usize, String> {
     let store = custom::CustomCommandsStore::new()?;
     store.import_commands(&json)

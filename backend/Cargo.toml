@@ -8,22 +8,11 @@ edition = "2021"
 
 [lib]
 name = "voice_os_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+crate-type = ["rlib"]
 
 [dependencies]
-# Tauri Core
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-tauri-plugin-deep-link = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-single-instance = "2"
+# Desktop IPC and global shortcuts
+global-hotkey = "0.7"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

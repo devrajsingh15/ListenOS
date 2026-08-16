@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 
 const STORAGE_KEY_SETTINGS = "listenos_local_settings";

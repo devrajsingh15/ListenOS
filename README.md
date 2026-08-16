@@ -1,171 +1,119 @@
 # ListenOS
 
-AI-powered desktop voice control for Windows and macOS.
+AI-powered desktop voice control for Windows, macOS, and Linux.
 
-ListenOS is a local-first Tauri app with a Next.js dashboard and a Rust backend. It supports dictation plus action commands with global shortcuts.
+ListenOS uses Electron for the desktop shell, a React interface bundled by Rspack, and a standalone Rust voice engine connected over private JSON-RPC IPC.
 
-![ListenOS Demo](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue) ![Tauri 2.0](https://img.shields.io/badge/Tauri-2.0-orange) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![Rust](https://img.shields.io/badge/Rust-stable-red)
-
-## Current Product Behavior
-
-- On first launch, onboarding runs to set API key, microphone, and starter templates.
-- Default hold-to-talk shortcut: `Ctrl+Space`
-- Default assistant-mode shortcut: `Ctrl+Alt+Space`
-- Assistant-mode shortcut toggles idle handsfree listening on/off.
-- Theme follows user device preference automatically (light/dark).
-- Settings and local runtime data are stored on-device.
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue) ![Electron](https://img.shields.io/badge/Electron-37-47848f) ![Rspack](https://img.shields.io/badge/Rspack-2-f4b942) ![Rust](https://img.shields.io/badge/Rust-stable-red)
 
 ## Features
 
+- Push-to-talk dictation and assistant mode with global shortcuts
 - Voice-to-action command execution
-- Fast push-to-talk dictation
-- Idle assistant handsfree mode with dedicated shortcut
-- Local-first runtime (no account login required)
-- Dashboard tools:
-  - Conversation
-  - Commands
-  - Clipboard
-  - Integrations
-  - Dictionary
-  - Snippets
-  - Tone
-- Configurable shortcuts and language settings
-- Groq API key management in Settings
+- Local settings, conversations, clipboard history, dictionary, notes, and snippets
+- Configurable shortcuts, language preferences, microphone, and Groq API key
+- Native tray, deep links, autostart, single-instance handling, and auto-updates
+- Sandboxed renderer with a narrow Electron preload API
+
+## Prerequisites
+
+Windows:
+
+- Windows 10/11 (64-bit)
+- Node.js 20+
+- Rust stable
+- Visual Studio Build Tools with the C++ workload
+
+macOS:
+
+- macOS 10.15+
+- Node.js 20+
+- Rust stable
+- Xcode Command Line Tools
+- Microphone and Accessibility permissions
+
+Linux also needs the ALSA development package used by `cpal`.
 
 ## Quick Start
 
-### Prerequisites
-
-Windows:
-- Windows 10/11 (64-bit)
-- Node.js 20+
-- Rust stable toolchain
-- Visual Studio Build Tools with C++ workload
-
-macOS:
-- macOS 10.15+
-- Node.js 20+
-- Rust stable toolchain
-- Xcode Command Line Tools (`xcode-select --install`)
-- Grant Microphone and Accessibility permissions when prompted
-
-### Install
-
-1. Clone:
-```bash
-git clone https://github.com/devrajsingh15/Listen_OS.git
-cd Listen_OS
-```
-
-2. Install dependencies:
 ```bash
 npm install
-# or
-bun install
+npm run desktop:dev
 ```
 
-3. Run development app:
-```bash
-npm run tauri:dev
-# or
-bun run tauri:dev
-```
+Set the Groq key in `Settings -> System`, or create `.env.local`:
 
-4. Build production app:
-```bash
-npm run tauri:build
-# or
-bun run tauri:build
-```
-
-Build outputs are under `backend/target/release/bundle/`.
-
-## Usage
-
-### Global Shortcuts
-
-| Action | Default | Behavior |
-|---|---|---|
-| Hold-to-talk | `Ctrl+Space` | Hold to record, release to process and execute |
-| Assistant mode | `Ctrl+Alt+Space` | Press once to start handsfree, press again to stop |
-
-Change both shortcuts in:
-`Settings -> General`
-
-### API Key Setup
-
-Recommended path:
-- Open `Settings -> System`
-- Paste your `Groq API key`
-- Save
-
-Optional env file path:
-1. Create/edit `.env.local`
-2. Add:
 ```env
 GROQ_API_KEY=your_groq_api_key_here
 LISTENOS_REQUIRE_CONFIRMATION=false
 ```
 
-## Theming
+## Build
 
-- Automatic device-based theme selection (`prefers-color-scheme`)
-- Shared global CSS token system for text, surfaces, borders, and hover states
-- Font stack uses Geist (`geist` package), loaded locally in app layouts
+```bash
+npm run desktop:build
+```
+
+Platform-specific bundles:
+
+```bash
+npm run desktop:build:windows
+npm run desktop:build:mac
+npm run desktop:build:linux
+```
+
+Installers and update metadata are written to `dist/electron/`.
+
+## Default Shortcuts
+
+| Action | Default | Behavior |
+|---|---|---|
+| Hold-to-talk | `Ctrl+Space` | Hold to record, release to process |
+| Assistant mode | `Ctrl+Alt+Space` | Toggle hands-free listening |
+
+Both shortcuts are configurable under `Settings -> General`.
 
 ## Architecture
 
 ```text
 ListenOS/
-├── src/                          # Next.js frontend
-│   ├── app/
-│   │   ├── (dashboard)/          # Main dashboard routes
-│   │   └── (overlay)/assistant   # Always-on assistant overlay UI
-│   ├── components/
-│   ├── context/
-│   └── lib/tauri.ts              # Tauri command/event bridge
-└── backend/
-    └── src/
-        ├── commands/             # Tauri command handlers
-        ├── config/               # App config + hotkeys
-        ├── audio/                # Capture/runtime
-        ├── cloud/                # STT/intent clients
-        └── streaming/
+|-- electron/
+|   |-- main.cjs          # Windows, tray, lifecycle, updates, backend process
+|   `-- preload.cjs       # Sandboxed renderer API
+|-- src/
+|   |-- app/              # Dashboard and assistant screen modules
+|   |-- components/
+|   `-- lib/desktop.ts    # Typed command and event bridge
+|-- backend/
+|   `-- src/
+|       |-- ipc.rs        # Line-delimited JSON-RPC server
+|       |-- commands/     # Voice and automation command handlers
+|       |-- audio/
+|       |-- cloud/
+|       `-- streaming/
+`-- scripts/
+    `-- electron-dev.mjs  # Rspack + Electron development launcher
 ```
+
+Electron owns desktop lifecycle concerns. The Rust child process owns audio capture, AI calls, persistence, global hotkeys, and native system automation. Renderer code cannot access Node.js or spawn arbitrary processes directly.
 
 ## Scripts
 
 | Command | Description |
 |---|---|
-| `npm run dev` | Start Next.js dev server |
-| `npm run tauri:dev` | Start full desktop app in dev mode |
-| `npm run build` | Build Next.js web bundle |
-| `npm run tauri:build` | Build desktop installer/bundles |
-| `npm run tauri:build:windows:nsis` | Build Windows NSIS |
-| `npm run tauri:build:mac:dmg` | Build macOS DMG |
-| `npm run tauri:build:linux:appimage` | Build Linux AppImage |
+| `npm run dev` | Start only the Rspack development server |
+| `npm run desktop:dev` | Start the complete Electron app |
+| `npm run build` | Bundle the React renderer with Rspack |
+| `npm run backend:build` | Compile the Rust backend in release mode |
+| `npm run desktop:build` | Build the current platform package |
 | `npm run lint` | Run ESLint |
 
-## macOS Packaging Notes
+## Releases
 
-Build DMG on macOS:
-```bash
-npm run tauri:build:mac:dmg
-```
-
-DMG output:
-`backend/target/release/bundle/dmg/`
-
-Post-build validation checklist:
-[docs/macos-smoke-test-checklist.md](docs/macos-smoke-test-checklist.md)
-
-## Release / Auto-Update Pipeline
-
-ListenOS supports in-app updates through Tauri updater.
+Tagged releases build Electron installers on Windows, macOS, and Linux. Electron Builder produces the `latest*.yml` metadata consumed by `electron-updater`, and the release workflow publishes it to Cloudflare R2.
 
 Required GitHub secrets:
-- `TAURI_SIGNING_PRIVATE_KEY`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
 - `CLOUDFLARE_R2_ACCESS_KEY_ID`
 - `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
 - `CLOUDFLARE_R2_ENDPOINT`
@@ -173,12 +121,9 @@ Required GitHub secrets:
 - `CLOUDFLARE_R2_PUBLIC_BASE_URL`
 
 Version helpers:
+
 - `npm run release:prepare -- <version>`
 - `npm run version:sync`
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
